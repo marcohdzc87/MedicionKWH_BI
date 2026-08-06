@@ -88,18 +88,14 @@ pestaña1, pestaña2, pestaña3, pestaña4 = st.tabs([
 ])
 
 # --- PESTAÑA 1: DASHBOARD ---
-    with pestaña1:
-
-    # Reemplaza la línea 92 por este bloque protegido:
+with pestaña1:
     try:
-    res_lecturas = supabase.table("lecturas").select("*, tarifas(*)").order("fecha_corte", desc=False).execute()
-    df = pd.DataFrame(res_lecturas.data)
-    except Exception:
-    df = pd.DataFrame()
-    
-    df = pd.DataFrame(res_lecturas.data)
-    
-    if len(df) >= 2:
+        res_lecturas = supabase.table("lecturas").select("*, tarifas(*)").order("fecha_corte", desc=False).execute()
+        df = pd.DataFrame(res_lecturas.data) if res_lecturas.data else pd.DataFrame()
+    except Exception as e:
+        df = pd.DataFrame()
+
+    if not df.empty and len(df) >= 2:
         df["fecha_corte"] = pd.to_datetime(df["fecha_corte"])
         lectura_anterior = df.iloc[-2]
         lectura_actual = df.iloc[-1]
@@ -119,52 +115,57 @@ pestaña1, pestaña2, pestaña3, pestaña4 = st.tabs([
         neto_proyectado = neto_diario * DIAS_PERIODO
         
         credito_previo = lectura_actual.get("credito_anterior_kwh", 0.0)
-        tarifa_act = lectura_actual["tarifas"]
+        tarifa_act = lectura_actual.get("tarifas", {})
         
-        calc_actual = calcular_detalle_factura(neto_medido, credito_previo, tarifa_act)
-        calc_proyectado = calcular_detalle_factura(neto_proyectado, credito_previo, tarifa_act)
-        
-        st.subheader(f"📅 Estado al {lectura_actual['fecha_corte'].strftime('%d/%m/%Y')} ({dias_transcurridos} días medidos)")
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Consumido CFE", f"{cons_medido:,.1f} kWh", f"{cons_diario:.1f} kWh/día")
-        c2.metric("Inyectado CFE", f"{inyec_medida:,.1f} kWh", f"{inyec_diaria:.1f} kWh/día")
-        c3.metric("Monto Actual Al Día", f"${calc_actual['total']:,.2f} MXN")
-        c4.metric("Proyección Fin de Bimestre", f"${calc_proyectado['total']:,.2f} MXN")
-        
-        st.divider()
-        
-        col_graf, col_info = st.columns([2, 1])
-        
-        with col_graf:
-            st.subheader("Historial de Lecturas de Medidor")
-            fig = px.line(
-                df, 
-                x="fecha_corte", 
-                y=["lectura_cons_kwh", "lectura_inyec_kwh"],
-                markers=True,
-                labels={"value": "Lectura Acumulada kWh", "variable": "Concepto", "fecha_corte": "Fecha"},
-                title="Evolución de Lecturas del Medidor Bidireccional"
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        if tarifa_act:
+            calc_actual = calcular_detalle_factura(neto_medido, credito_previo, tarifa_act)
+            calc_proyectado = calcular_detalle_factura(neto_proyectado, credito_previo, tarifa_act)
             
-        with col_info:
-            st.subheader("Detalle del Periodo Medido")
-            st.write(f"• **Saldo Crédito Anterior:** {credito_previo:.1f} kWh")
-            if calc_actual['nuevo_credito'] > 0:
-                st.success(f"A la fecha tienes **{calc_actual['nuevo_credito']} kWh** a favor en tu bolsa de crédito.")
-            else:
-                st.warning(f"Llevas **{calc_actual['kwh_facturables']} kWh** netos a pagar.")
+            st.subheader(f"📅 Estado al {lectura_actual['fecha_corte'].strftime('%d/%m/%Y')} ({dias_transcurridos} días medidos)")
+            
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Consumido CFE", f"{cons_medido:,.1f} kWh", f"{cons_diario:.1f} kWh/día")
+            c2.metric("Inyectado CFE", f"{inyec_medida:,.1f} kWh", f"{inyec_diaria:.1f} kWh/día")
+            c3.metric("Monto Actual Al Día", f"${calc_actual['total']:,.2f} MXN")
+            c4.metric("Proyección Fin de Bimestre", f"${calc_proyectado['total']:,.2f} MXN")
+            
+            st.divider()
+            
+            col_graf, col_info = st.columns([2, 1])
+            
+            with col_graf:
+                st.subheader("Historial de Lecturas de Medidor")
+                fig = px.line(
+                    df, 
+                    x="fecha_corte", 
+                    y=["lectura_cons_kwh", "lectura_inyec_kwh"],
+                    markers=True,
+                    labels={"value": "Lectura Acumulada kWh", "variable": "Concepto", "fecha_corte": "Fecha"},
+                    title="Evolución de Lecturas del Medidor Bidireccional"
+                )
+                st.plotly_chart(fig, use_container_width=True)
                 
-            st.write("---")
-            st.markdown("### **Desglose Actual**")
-            st.write(f"• Energía: ${calc_actual['subtotal_energia']:,.2f}")
-            st.write(f"• DAP: ${calc_actual['dap']:,.2f}")
-            st.write(f"• IVA: ${calc_actual['iva']:,.2f}")
-            st.markdown(f"### **Total hoy: ${calc_actual['total']:,.2f} MXN**")
+            with col_info:
+                st.subheader("Detalle del Periodo Medido")
+                st.write(f"• **Saldo Crédito Anterior:** {credito_previo:.1f} kWh")
+                if calc_actual['nuevo_credito'] > 0:
+                    st.success(f"A la fecha tienes **{calc_actual['nuevo_credito']} kWh** a favor en tu bolsa de crédito.")
+                else:
+                    st.warning(f"Llevas **{calc_actual['kwh_facturables']} kWh** netos a pagar.")
+                    
+                st.write("---")
+                st.markdown("### **Desglose Actual**")
+                st.write(f"• Energía: ${calc_actual['subtotal_energia']:,.2f}")
+                st.write(f"• DAP: ${calc_actual['dap']:,.2f}")
+                st.write(f"• IVA: ${calc_actual['iva']:,.2f}")
+                st.markdown(f"### **Total hoy: ${calc_actual['total']:,.2f} MXN**")
+        else:
+            st.warning("Falta asociar una tarifa válida a la última lectura.")
 
+    elif len(df) == 1:
+        st.info("Has guardado tu primera lectura (Lectura Inicial). Agrega una segunda lectura en cualquier fecha para comenzar a calcular proyecciones y tendencias.")
     else:
-        st.info("Ingresa al menos 2 lecturas para calcular consumos por día y estimaciones.")
+        st.info("👋 **¡Bienvenido!** Para comenzar, ve a la pestaña **⚙️ Tarifas** para registrar tu tarifa y luego a **➕ Capturar Lectura Libre** para añadir la primera lectura de tu medidor.")
 
 # --- PESTAÑA 2: CAPTURAR LECTURA ---
 with pestaña2:
