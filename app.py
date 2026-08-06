@@ -209,14 +209,14 @@ with pestaña1:
             col_graf, col_info = st.columns([2, 1])
             
             with col_graf:
-                st.subheader("Historial de Lecturas del Medidor")
+                st.subheader("Historial de Lecturas del Medidor e Inversor")
                 fig = px.line(
                     df, 
                     x="fecha_corte", 
-                    y=["lectura_cons_kwh", "lectura_inyec_kwh"],
+                    y=["lectura_cons_kwh", "lectura_inyec_kwh", "generacion_solar_total_kwh"],
                     markers=True,
                     labels={"value": "Lectura Acumulada (kWh)", "variable": "Concepto", "fecha_corte": "Fecha"},
-                    title="Evolución de Lecturas (Enteros)"
+                    title="Evolución de Lecturas (Consumo, Inyección y Producción Solar)"
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 
