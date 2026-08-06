@@ -88,13 +88,13 @@ pestaña1, pestaña2, pestaña3, pestaña4 = st.tabs([
 ])
 
 # --- PESTAÑA 1: DASHBOARD ---
-with pestaña1:
+    with pestaña1:
 
     # Reemplaza la línea 92 por este bloque protegido:
-try:
+    try:
     res_lecturas = supabase.table("lecturas").select("*, tarifas(*)").order("fecha_corte", desc=False).execute()
     df = pd.DataFrame(res_lecturas.data)
-except Exception:
+    except Exception:
     df = pd.DataFrame()
     
     df = pd.DataFrame(res_lecturas.data)
