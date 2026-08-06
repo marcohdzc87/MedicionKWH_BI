@@ -188,13 +188,12 @@ with pestaña1:
             
             st.divider()
             
-            # Fila 1: 5 Métricas Principales
-            col1, col2, col3, col4, col5 = st.columns(5)
+            # Fila 1: Métricas de Consumo, Generación e Inyección
+            col1, col2, col3, col4 = st.columns(4)
             col1.metric("Tomado de CFE", f"{cons_medido:,} kWh", f"{cons_diario:.1f} kWh/día")
-            col2.metric("Generación Solar Total", f"{gen_solar:,} kWh", f"{gen_solar_diaria:.1f} kWh/día")
+            col2.metric("Generación Solar Total", f"{gen_solar:,} kWh", f"{gen_solar_diaria:.1f} kWh/día", help="Producción registrada por tus paneles")
             col3.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
-            col4.metric("kWh Netos a Pagar Hoy", f"{calc_actual['kwh_facturables']:,} kWh")
-            col5.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN")
+            col4.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN", f"Neto: {calc_actual['kwh_facturables']:,} kWh")
             
             st.divider()
             
@@ -213,14 +212,15 @@ with pestaña1:
             with col_graf:
                 st.subheader("Visualización del Historial de Energía")
                 
-                # --- PREPARACIÓN DE DATOS DIFERENCIALES (.diff()) ---
+                # --- PREPARACIÓN DE DATOS DIFERENCIALES ---
                 df_grafica = df.sort_values("fecha_corte").copy()
-                df_grafica["Consumido CFE"] = df_grafica["lectura_cons_kwh"].diff().apply(lambda x: max(0, x) if pd.notnull(x) else x)
-                df_grafica["Inyectado CFE"] = df_grafica["lectura_inyec_kwh"].diff().apply(lambda x: max(0, x) if pd.notnull(x) else x)
-                df_grafica["Generación Solar"] = df_grafica["generacion_solar_total_kwh"].diff().apply(lambda x: max(0, x) if pd.notnull(x) else x)
+                
+                df_grafica["Consumido CFE"] = df_grafica["lectura_cons_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
+                df_grafica["Inyectado CFE"] = df_grafica["lectura_inyec_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
+                df_grafica["Generación Solar"] = df_grafica["generacion_solar_total_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
                 df_grafica["Saldo Neto CFE"] = df_grafica["Consumido CFE"] - df_grafica["Inyectado CFE"]
                 
-                df_grafica_clean = df_grafica.dropna(subset=["Consumido CFE"]).copy()
+                df_grafica_clean = df_grafica.iloc[1:].copy()
                 df_grafica_clean["Periodo"] = df_grafica_clean["fecha_corte"].astype(str)
                 
                 # Selector de formato de gráfica
@@ -247,12 +247,13 @@ with pestaña1:
                             barmode="group",
                             text_auto=True,
                             color_discrete_map={
-                                "Consumido CFE": "#1f77b4",
-                                "Inyectado CFE": "#2ca02c",
-                                "Generación Solar": "#ff7f0e"
+                                "Consumido CFE": "#1f77b4",     # Azul
+                                "Inyectado CFE": "#2ca02c",     # Verde
+                                "Generación Solar": "#ff7f0e"   # Naranja Solar
                             },
                             title="Energía del Intervalo (kWh Reales por Toma)"
                         )
+                        fig1.update_layout(yaxis_title="kWh", xaxis_title="Fecha de Corte")
                         st.plotly_chart(fig1, use_container_width=True)
                     else:
                         st.info("Registra al menos 2 lecturas para visualizar barras agrupadas.")
@@ -269,6 +270,7 @@ with pestaña1:
                             color_continuous_scale=["#2ca02c", "#d62728"],
                             title="Balance Neto a Facturar (Consumo CFE - Inyección CFE)"
                         )
+                        fig2.update_layout(yaxis_title="kWh Netos", xaxis_title="Fecha de Corte")
                         st.plotly_chart(fig2, use_container_width=True)
                     else:
                         st.info("Registra al menos 2 lecturas para calcular saldo neto.")
@@ -281,7 +283,7 @@ with pestaña1:
                         y=["lectura_cons_kwh", "lectura_inyec_kwh", "generacion_solar_total_kwh"],
                         markers=True,
                         labels={"value": "Lectura Acumulada (kWh)", "variable": "Concepto", "fecha_corte": "Fecha"},
-                        title="Evolución Continua de Contadores Brutoss"
+                        title="Evolución Continua de Contadores Brutos"
                     )
                     st.plotly_chart(fig3, use_container_width=True)
                 
