@@ -140,7 +140,7 @@ with pestaña1:
         df["fecha_corte"] = pd.to_datetime(df["fecha_corte"]).dt.date
         df = df.sort_values("fecha_corte").reset_index(drop=True)
         
-        # 1. ASIGNACIÓN DE CICLOS DE FACTURACIÓN A CADA REGISTRO
+        # Asignación de ciclos de facturación a cada registro
         ciclos_lista = []
         for idx, row in df.iterrows():
             t_obj = row.get("tarifas") or {}
@@ -154,30 +154,25 @@ with pestaña1:
         df["ciclo_fin"] = [c[1] for c in ciclos_lista]
         df["ciclo_etiqueta"] = [c[2] for c in ciclos_lista]
 
-        # Obtener lista de ciclos únicos ordenados descendentemente (actual primero)
         ciclos_unicos = df[["ciclo_inicio", "ciclo_fin", "ciclo_etiqueta"]].drop_duplicates().sort_values("ciclo_inicio", ascending=False)
         opciones_ciclos = ciclos_unicos["ciclo_etiqueta"].tolist()
 
-        # Selector de Ciclo en la parte superior del Dashboard
         st.markdown("### 🗓️ Selección de Ciclo de Facturación CFE")
         ciclo_seleccionado = st.selectbox(
             "Selecciona el Bimestre que deseas auditar:", 
             options=opciones_ciclos,
-            index=0,
-            help="El primer ciclo es el ciclo actual en curso."
+            index=0
         )
 
         row_ciclo_sel = ciclos_unicos[ciclos_unicos["ciclo_etiqueta"] == ciclo_seleccionado].iloc[0]
         inicio_ciclo = row_ciclo_sel["ciclo_inicio"]
         fin_ciclo = row_ciclo_sel["ciclo_fin"]
 
-        # Filtrar datos pertenecientes o anteriores al ciclo seleccionado
         df_hasta_ciclo = df[df["fecha_corte"] <= fin_ciclo]
-        df_en_ciclo = df[(df["fecha_corte"] >= inicio_ciclo) & (df["fecha_corte"] <= fin_ciclo)]
+        df_en_ciclo = df[(df["fecha_corte"] >= inicio_ciclo) & (df["fecha_corte"] <= fin_ciclo)].copy()
 
         lectura_actual = df_hasta_ciclo.iloc[-1]
         
-        # Búsqueda de la lectura base previa al inicio del ciclo
         df_previo = df[df["fecha_corte"] <= inicio_ciclo]
         if not df_previo.empty:
             lectura_inicio_ciclo = df_previo.iloc[-1]
@@ -188,6 +183,9 @@ with pestaña1:
         tarifa_act = lectura_actual.get("tarifas", {})
         
         if isinstance(tarifa_act, dict) and tarifa_act:
+            lim_b_val = int(round(float(tarifa_act.get("limite_basico", 150))))
+            lim_i_val = int(round(float(tarifa_act.get("limite_intermedio", 280))))
+            
             dias_totales_ciclo = (fin_ciclo - inicio_ciclo).days
             dias_transcurridos = max(1, (fecha_act - lectura_inicio_ciclo["fecha_corte"]).days)
             dias_restantes = max(0, (fin_ciclo - fecha_act).days)
@@ -203,7 +201,6 @@ with pestaña1:
             cons_diario = cons_medido / dias_transcurridos
             inyec_diaria = inyec_medida / dias_transcurridos
             neto_diario = neto_medido / dias_transcurridos
-            gen_solar_diaria = gen_solar / dias_transcurridos
 
             kwh_restantes_proyectados = int(round(neto_diario * dias_restantes))
             neto_proyectado_total = neto_medido + kwh_restantes_proyectados
@@ -227,11 +224,13 @@ with pestaña1:
 
             st.divider()
 
-            col1, col2, col3, col4 = st.columns(4)
+            # Fila 1: Tarjetas con la métrica explicita de kWh Reales a Pagar
+            col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Tomado de CFE", f"{cons_medido:,} kWh", f"{cons_diario:.1f} kWh/día")
-            col2.metric("Generación Solar Periodo", f"{gen_solar:,} kWh", f"Total Acum: {gen_solar_acumulada:,} kWh", help="Producción en este ciclo")
-            col3.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
-            col4.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN", f"Neto: {calc_actual['kwh_facturables']:,} kWh")
+            col2.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
+            col3.metric("⚡ Netos a Pagar", f"{calc_actual['kwh_facturables']:,} kWh", f"{neto_diario:.1f} kWh/día neto", help="Consumo CFE menos Inyección CFE y crédito previo")
+            col4.metric("Generación Solar", f"{gen_solar:,} kWh", f"Acum: {gen_solar_acumulada:,} kWh")
+            col5.metric("Recibo Estimado Hoy", f"${calc_actual['total']:,.2f} MXN", f"Costo/kWh: ${(calc_actual['total']/max(1, calc_actual['kwh_facturables'])):.2f}")
 
             st.divider()
 
@@ -249,40 +248,98 @@ with pestaña1:
             with col_graf:
                 st.subheader("Visualización del Historial del Ciclo")
 
-                # Preparar datos agregados por ciclo para la gráfica de barras agrupadas
-                df_acum_ciclos = []
-                for idx, r_c in ciclos_unicos.sort_values("ciclo_inicio").iterrows():
-                    c_ini = r_c["ciclo_inicio"]
-                    c_fin = r_c["ciclo_fin"]
-                    lbl = r_c["ciclo_etiqueta"]
-
-                    df_sub = df[df["fecha_corte"] <= c_fin]
-                    if not df_sub.empty:
-                        u_fin = df_sub.iloc[-1]
-                        df_ini_search = df[df["fecha_corte"] <= c_ini]
-                        u_ini = df_ini_search.iloc[-1] if not df_ini_search.empty else df.iloc[0]
-
-                        c_val = max(0, int(round(u_fin["lectura_cons_kwh"] - u_ini["lectura_cons_kwh"])))
-                        i_val = max(0, int(round(u_fin["lectura_inyec_kwh"] - u_ini["lectura_inyec_kwh"])))
-                        s_val = max(0, int(round(u_fin["generacion_solar_total_kwh"] - u_ini["generacion_solar_total_kwh"])))
-
-                        df_acum_ciclos.append({
-                            "Ciclo": lbl,
-                            "Consumido CFE": c_val,
-                            "Inyectado CFE": i_val,
-                            "Generación Solar": s_val
-                        })
-
-                df_grafica_ciclos = pd.DataFrame(df_acum_ciclos)
-
                 v_graf1, v_graf2, v_graf3 = st.tabs([
+                    "🌊 Gráfica de Área (Inyectado vs Consumido + Neto a Pagar $)", 
                     "📊 Barras Agrupadas por Ciclo CFE", 
-                    "🌊 Gráfica de Área (Tomas de este Ciclo)", 
                     "📈 Odómetros Acumulados"
                 ])
 
-                # OPCIÓN 1: Barras Agrupadas por Ciclo Completo
+                # OPCIÓN 1: Gráfica de Área Inyectado vs Consumido y Diferencia Destacada + Líneas Tarifarias
                 with v_graf1:
+                    if not df_en_ciclo.empty:
+                        # Cálculo acumulativo desde la lectura inicial del ciclo
+                        df_en_ciclo["Consumido Acum"] = [max(0, int(round(r["lectura_cons_kwh"] - lectura_inicio_ciclo["lectura_cons_kwh"]))) for _, r in df_en_ciclo.iterrows()]
+                        df_en_ciclo["Inyectado Acum"] = [max(0, int(round(r["lectura_inyec_kwh"] - lectura_inicio_ciclo["lectura_inyec_kwh"]))) for _, r in df_en_ciclo.iterrows()]
+                        df_en_ciclo["Neto Pagar Acum"] = df_en_ciclo["Consumido Acum"] - df_en_ciclo["Inyectado Acum"]
+                        
+                        # Cálculo del precio estimado en cada fecha
+                        montos = [calcular_detalle_factura(n, credito_previo, tarifa_act)["total"] for n in df_en_ciclo["Neto Pagar Acum"]]
+                        df_en_ciclo["Monto_MXN"] = montos
+                        df_en_ciclo["Periodo"] = df_en_ciclo["fecha_corte"].astype(str)
+
+                        fig_area = go.Figure()
+
+                        # 1. Consumido de CFE (Línea Azul)
+                        fig_area.add_trace(go.Scatter(
+                            x=df_en_ciclo["Periodo"], y=df_en_ciclo["Consumido Acum"],
+                            name="Consumido CFE", mode="lines+markers",
+                            line=dict(color="#1f77b4", width=2, dash="dash")
+                        ))
+
+                        # 2. Inyectado a CFE (Línea Verde)
+                        fig_area.add_trace(go.Scatter(
+                            x=df_en_ciclo["Periodo"], y=df_en_ciclo["Inyectado Acum"],
+                            name="Inyectado CFE", mode="lines+markers",
+                            line=dict(color="#2ca02c", width=2)
+                        ))
+
+                        # 3. Diferencia Netos a Pagar (Área Destacada en Rojo con Monto $)
+                        text_labels = [f"<b>{k:,} kWh</b><br>${m:,.2f} MXN" for k, m in zip(df_en_ciclo["Neto Pagar Acum"], df_en_ciclo["Monto_MXN"])]
+                        fig_area.add_trace(go.Scatter(
+                            x=df_en_ciclo["Periodo"], y=df_en_ciclo["Neto Pagar Acum"],
+                            name="Neto a Pagar (Diferencia)", mode="lines+markers+text",
+                            fill="tozeroy",
+                            line=dict(color="#d62728", width=3),
+                            fillcolor="rgba(214, 39, 40, 0.25)",
+                            text=text_labels, textposition="top center"
+                        ))
+
+                        # Líneas Horizontales de Umbrales de Escalones Tarifarios (150 kWh y 280 kWh)
+                        fig_area.add_hline(
+                            y=lim_b_val, line_dash="dot", line_color="orange",
+                            annotation_text=f"Límite Básico ({lim_b_val} kWh)", annotation_position="top left"
+                        )
+                        if lim_i_val > lim_b_val:
+                            fig_area.add_hline(
+                                y=lim_i_val, line_dash="dot", line_color="red",
+                                annotation_text=f"Límite Intermedio ({lim_i_val} kWh)", annotation_position="top left"
+                            )
+
+                        fig_area.update_layout(
+                            title="Balance Neto a Pagar y Salto de Escalones Tarifarios",
+                            xaxis_title="Fecha de Toma", yaxis_title="kWh Acumulados en Ciclo",
+                            hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+                        )
+                        st.plotly_chart(fig_area, use_container_width=True)
+                    else:
+                        st.info("No hay tomas suficientes para este periodo.")
+
+                # OPCIÓN 2: Barras Agrupadas por Ciclo Completo
+                with v_graf2:
+                    df_acum_ciclos = []
+                    for idx, r_c in ciclos_unicos.sort_values("ciclo_inicio").iterrows():
+                        c_ini = r_c["ciclo_inicio"]
+                        c_fin = r_c["ciclo_fin"]
+                        lbl = r_c["ciclo_etiqueta"]
+
+                        df_sub = df[df["fecha_corte"] <= c_fin]
+                        if not df_sub.empty:
+                            u_fin = df_sub.iloc[-1]
+                            df_ini_search = df[df["fecha_corte"] <= c_ini]
+                            u_ini = df_ini_search.iloc[-1] if not df_ini_search.empty else df.iloc[0]
+
+                            c_val = max(0, int(round(u_fin["lectura_cons_kwh"] - u_ini["lectura_cons_kwh"])))
+                            i_val = max(0, int(round(u_fin["lectura_inyec_kwh"] - u_ini["lectura_inyec_kwh"])))
+                            s_val = max(0, int(round(u_fin["generacion_solar_total_kwh"] - u_ini["generacion_solar_total_kwh"])))
+
+                            df_acum_ciclos.append({
+                                "Ciclo": lbl,
+                                "Consumido CFE": c_val,
+                                "Inyectado CFE": i_val,
+                                "Generación Solar": s_val
+                            })
+
+                    df_grafica_ciclos = pd.DataFrame(df_acum_ciclos)
                     if not df_grafica_ciclos.empty:
                         df_melted_ciclos = df_grafica_ciclos.melt(
                             id_vars=["Ciclo"], 
@@ -291,61 +348,18 @@ with pestaña1:
                             value_name="kWh"
                         )
                         fig1 = px.bar(
-                            df_melted_ciclos, 
-                            x="Ciclo", 
-                            y="kWh", 
-                            color="Concepto",
-                            barmode="group",
-                            text_auto=True,
-                            color_discrete_map={
-                                "Consumido CFE": "#1f77b4",
-                                "Inyectado CFE": "#2ca02c",
-                                "Generación Solar": "#ff7f0e"
-                            },
+                            df_melted_ciclos, x="Ciclo", y="kWh", color="Concepto",
+                            barmode="group", text_auto=True,
+                            color_discrete_map={"Consumido CFE": "#1f77b4", "Inyectado CFE": "#2ca02c", "Generación Solar": "#ff7f0e"},
                             title="Consumo y Generación por Bimestre Oficial CFE"
                         )
                         fig1.update_layout(yaxis_title="kWh Acumulados", xaxis_title="Periodo de Corte CFE")
                         st.plotly_chart(fig1, use_container_width=True)
 
-                # OPCIÓN 2: Gráfica de Área de las tomas dentro del ciclo seleccionado
-                with v_graf2:
-                    df_tomas_ciclo = df_en_ciclo.copy()
-                    if len(df_tomas_ciclo) >= 1:
-                        df_tomas_ciclo["Consumido CFE"] = df_tomas_ciclo["lectura_cons_kwh"].diff().fillna(df_tomas_ciclo["lectura_cons_kwh"] - lectura_inicio_ciclo["lectura_cons_kwh"]).apply(lambda x: max(0, int(round(x))))
-                        df_tomas_ciclo["Inyectado CFE"] = df_tomas_ciclo["lectura_inyec_kwh"].diff().fillna(df_tomas_ciclo["lectura_inyec_kwh"] - lectura_inicio_ciclo["lectura_inyec_kwh"]).apply(lambda x: max(0, int(round(x))))
-                        df_tomas_ciclo["Generación Solar"] = df_tomas_ciclo["generacion_solar_total_kwh"].diff().fillna(df_tomas_ciclo["generacion_solar_total_kwh"] - lectura_inicio_ciclo["generacion_solar_total_kwh"]).apply(lambda x: max(0, int(round(x))))
-                        df_tomas_ciclo["Periodo"] = df_tomas_ciclo["fecha_corte"].astype(str)
-
-                        fig2 = go.Figure()
-                        fig2.add_trace(go.Scatter(
-                            x=df_tomas_ciclo["Periodo"], y=df_tomas_ciclo["Consumido CFE"],
-                            name="Consumido CFE", mode="lines+markers", fill="tozeroy",
-                            line=dict(color="#1f77b4", width=2), fillcolor="rgba(31, 119, 180, 0.3)"
-                        ))
-                        fig2.add_trace(go.Scatter(
-                            x=df_tomas_ciclo["Periodo"], y=df_tomas_ciclo["Inyectado CFE"],
-                            name="Inyectado CFE", mode="lines+markers", fill="tozeroy",
-                            line=dict(color="#2ca02c", width=2), fillcolor="rgba(44, 160, 44, 0.3)"
-                        ))
-                        fig2.add_trace(go.Scatter(
-                            x=df_tomas_ciclo["Periodo"], y=df_tomas_ciclo["Generación Solar"],
-                            name="Generación Solar", mode="lines+markers", fill="tozeroy",
-                            line=dict(color="#ff7f0e", width=2), fillcolor="rgba(255, 127, 14, 0.3)"
-                        ))
-                        fig2.update_layout(
-                            title="Evolución de Tomas de Lectura en este Bimestre",
-                            xaxis_title="Fecha de Toma", yaxis_title="kWh del Intervalo",
-                            hovermode="x unified", legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-                        )
-                        st.plotly_chart(fig2, use_container_width=True)
-                    else:
-                        st.info("No hay tomas suficientes en este periodo.")
-
                 # OPCIÓN 3: Odómetros Acumulados
                 with v_graf3:
                     fig3 = px.line(
-                        df, 
-                        x="fecha_corte", 
+                        df, x="fecha_corte", 
                         y=["lectura_cons_kwh", "lectura_inyec_kwh", "generacion_solar_total_kwh"],
                         markers=True,
                         labels={"value": "Lectura Acumulada (kWh)", "variable": "Concepto", "fecha_corte": "Fecha"},
