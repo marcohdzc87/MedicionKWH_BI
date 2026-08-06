@@ -187,11 +187,13 @@ with pestaña1:
             
             st.divider()
             
-            col1, col2, col3, col4 = st.columns(4)
+# Fila 1: Métricas de Consumo, Generación e Inyección
+            col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Tomado de CFE", f"{cons_medido:,} kWh", f"{cons_diario:.1f} kWh/día")
-            col2.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
-            col3.metric("kWh Netos Facturables Hoy", f"{calc_actual['kwh_facturables']:,} kWh")
-            col4.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN")
+            col2.metric("Generación Solar Total", f"{gen_solar:,} kWh", f"{gen_solar / dias_transcurridos:.1f} kWh/día", help="Energía total producida por tus paneles solares")
+            col3.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
+            col4.metric("kWh Netos a Pagar Hoy", f"{calc_actual['kwh_facturables']:,} kWh")
+            col5.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN")
             
             st.divider()
             
