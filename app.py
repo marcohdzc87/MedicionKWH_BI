@@ -188,10 +188,10 @@ with pestaña1:
             
             st.divider()
             
-            # Fila 1: Métricas de Consumo, Generación e Inyección
+            # Fila 1: Métricas de Consumo, Generación e Inyección (4 Columnas)
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Tomado de CFE", f"{cons_medido:,} kWh", f"{cons_diario:.1f} kWh/día")
-            col2.metric("Generación Solar Total", f"{gen_solar:,} kWh", f"{gen_solar_diaria:.1f} kWh/día", help="Producción registrada por tus paneles")
+            col2.metric("Generación Solar Total", f"{gen_solar:,} kWh", f"{gen_solar_diaria:.1f} kWh/día", help="Producción registrada de los paneles")
             col3.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
             col4.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN", f"Neto: {calc_actual['kwh_facturables']:,} kWh")
             
@@ -215,11 +215,13 @@ with pestaña1:
                 # --- PREPARACIÓN DE DATOS DIFERENCIALES ---
                 df_grafica = df.sort_values("fecha_corte").copy()
                 
+                # Asegurar valores enteros y positivos en los deltas
                 df_grafica["Consumido CFE"] = df_grafica["lectura_cons_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
                 df_grafica["Inyectado CFE"] = df_grafica["lectura_inyec_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
                 df_grafica["Generación Solar"] = df_grafica["generacion_solar_total_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
                 df_grafica["Saldo Neto CFE"] = df_grafica["Consumido CFE"] - df_grafica["Inyectado CFE"]
                 
+                # Ignoramos la primera fila solo para los deltas
                 df_grafica_clean = df_grafica.iloc[1:].copy()
                 df_grafica_clean["Periodo"] = df_grafica_clean["fecha_corte"].astype(str)
                 
@@ -230,7 +232,7 @@ with pestaña1:
                     "📈 Odómetros Acumulados"
                 ])
                 
-                # OPCIÓN 1: Barras Agrupadas por Intervalo
+                # OPCIÓN 1: Barras Agrupadas
                 with v_graf1:
                     if not df_grafica_clean.empty:
                         df_melted = df_grafica_clean.melt(
@@ -270,7 +272,6 @@ with pestaña1:
                             color_continuous_scale=["#2ca02c", "#d62728"],
                             title="Balance Neto a Facturar (Consumo CFE - Inyección CFE)"
                         )
-                        fig2.update_layout(yaxis_title="kWh Netos", xaxis_title="Fecha de Corte")
                         st.plotly_chart(fig2, use_container_width=True)
                     else:
                         st.info("Registra al menos 2 lecturas para calcular saldo neto.")
