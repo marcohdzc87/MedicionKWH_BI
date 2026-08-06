@@ -25,6 +25,8 @@ except Exception as e:
 # -----------------------------------------------------------------------------
 # Función Auxiliar para Consultar Growatt Directamente
 # -----------------------------------------------------------------------------
+from growattServer import GrowattApi, Timespan
+
 def obtener_solar_growatt_directo():
     user = st.secrets.get("GROWATT_USER") or os.getenv("GROWATT_USER")
     pw = st.secrets.get("GROWATT_PASS") or os.getenv("GROWATT_PASS")
@@ -33,7 +35,7 @@ def obtener_solar_growatt_directo():
         return None, "Faltan credenciales GROWATT_USER o GROWATT_PASS."
 
     try:
-        api = growattServer.GrowattApi(agent_identifier="Android/ShinePhone")
+        api = GrowattApi(agent_identifier="Android/ShinePhone")
         api.server_url = 'https://server.growatt.com/'
         
         login = api.login(user, pw)
@@ -46,9 +48,10 @@ def obtener_solar_growatt_directo():
         plant_list = api.plant_list(user_id)
         plant_id = plant_list['data'][0]['plantId']
         
-        # Fecha de hoy en formato YYYY-MM-DD y timespan=1 (requerido por la API)
         fecha_hoy = datetime.now().strftime("%Y-%m-%d")
-        plant_info = api.plant_detail(plant_id, timespan=1, date=fecha_hoy)
+        
+        # Uso del enum Timespan.DAY
+        plant_info = api.plant_detail(plant_id, timespan=Timespan.DAY, date=fecha_hoy)
         
         kwh_total = int(round(float(plant_info['eTotal'])))
         return kwh_total, None
