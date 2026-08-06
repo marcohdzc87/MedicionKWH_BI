@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import calendar
 import io
 from supabase import create_client
@@ -21,22 +21,16 @@ except Exception as e:
 # Lógica de Cálculo de Días y Fechas de Ciclo
 # -----------------------------------------------------------------------------
 def obtener_fechas_ciclo(fecha_actual, dia_corte, es_bimestral=True):
-    """
-    Calcula el inicio y fin del ciclo de facturación según el día de corte y periodicidad.
-    """
     año = fecha_actual.year
     mes = fecha_actual.month
     
-    # Ajustar día de corte si el mes actual tiene menos días
     dias_en_mes = calendar.monthrange(año, mes)[1]
     dia_efectivo = min(dia_corte, dias_en_mes)
     
     if fecha_actual.day >= dia_efectivo:
-        # El ciclo actual comenzó este mes en el día de corte
         inicio_ciclo = date(año, mes, dia_efectivo)
         meses_a_sumar = 2 if es_bimestral else 1
         
-        # Calcular fecha fin
         mes_fin = mes + meses_a_sumar
         año_fin = año
         if mes_fin > 12:
@@ -46,7 +40,6 @@ def obtener_fechas_ciclo(fecha_actual, dia_corte, es_bimestral=True):
         dias_en_mes_fin = calendar.monthrange(año_fin, mes_fin)[1]
         fin_ciclo = date(año_fin, mes_fin, min(dia_corte, dias_en_mes_fin))
     else:
-        # El ciclo actual comenzó en un periodo anterior
         meses_a_restar = 2 if es_bimestral else 1
         mes_inicio = mes - meses_a_restar
         año_inicio = año
@@ -61,22 +54,22 @@ def obtener_fechas_ciclo(fecha_actual, dia_corte, es_bimestral=True):
     return inicio_ciclo, fin_ciclo
 
 # -----------------------------------------------------------------------------
-# Lógica de Cálculo Dinámico de Tarifa
+# Lógica de Cálculo Dinámico de Tarifa (Soporta 3 decimales en precios)
 # -----------------------------------------------------------------------------
 def calcular_detalle_factura(kwh_netos_periodo, credito_disponible, tarifa):
     balance_kwh = kwh_netos_periodo - credito_disponible
     
     if balance_kwh <= 0:
-        kwh_facturables = 0.0
-        nuevo_credito = abs(balance_kwh)
+        kwh_facturables = 0
+        nuevo_credito = int(round(abs(balance_kwh)))
         subtotal_energia = float(tarifa.get("cargo_fijo", 0.0))
         desglose_rangos = {"Básico": 0.0, "Intermedio": 0.0, "Excedente": 0.0}
     else:
-        kwh_facturables = balance_kwh
-        nuevo_credito = 0.0
+        kwh_facturables = int(round(balance_kwh))
+        nuevo_credito = 0
         
-        l_basico = float(tarifa.get("limite_basico", 150.0))
-        l_inter = float(tarifa.get("limite_intermedio", 280.0))
+        l_basico = int(round(float(tarifa.get("limite_basico", 150))))
+        l_inter = int(round(float(tarifa.get("limite_intermedio", 280))))
         
         p_basico = float(tarifa.get("precio_basico", 1.087))
         p_inter = float(tarifa.get("precio_intermedio", 1.320))
@@ -107,8 +100,8 @@ def calcular_detalle_factura(kwh_netos_periodo, credito_disponible, tarifa):
     total_factura = subtotal_con_dap + iva
     
     return {
-        "kwh_facturables": round(kwh_facturables, 1),
-        "nuevo_credito": round(nuevo_credito, 1),
+        "kwh_facturables": kwh_facturables,
+        "nuevo_credito": nuevo_credito,
         "subtotal_energia": round(subtotal_energia, 2),
         "desglose_rangos": desglose_rangos,
         "dap": round(dap, 2),
@@ -128,8 +121,8 @@ def generar_excel(df_export):
 st.title("⚡ Gestor Energético Bidireccional CFE & Solar")
 
 pestaña1, pestaña2, pestaña3, pestaña4 = st.tabs([
-    "📊 Dashboard & Proyección Detallada", 
-    "➕ Capturar Lectura Libre", 
+    "📊 Dashboard & Proyección", 
+    "➕ Capturar y Editar Lecturas", 
     "📥 Descargar Exportación",
     "⚙️ Administración de Tarifas y Ciclo"
 ])
@@ -151,11 +144,9 @@ with pestaña1:
         tarifa_act = lectura_actual.get("tarifas", {})
         
         if isinstance(tarifa_act, dict) and tarifa_act:
-            # Datos de configuración del ciclo CFE
             dia_corte_cfe = int(tarifa_act.get("dia_corte_cfe", 15))
             es_bimestral = tarifa_act.get("es_bimestral", True)
             
-            # Cálculo de fechas de ciclo
             inicio_ciclo, fin_ciclo = obtener_fechas_ciclo(fecha_act, dia_corte_cfe, es_bimestral)
             dias_totales_ciclo = (fin_ciclo - inicio_ciclo).days
             dias_transcurridos = (fecha_act - lectura_anterior["fecha_corte"]).days
@@ -164,57 +155,50 @@ with pestaña1:
             dias_restantes = (fin_ciclo - fecha_act).days
             dias_restantes = max(0, dias_restantes)
             
-            # Consumos y promedios
-            cons_medido = lectura_actual["lectura_cons_kwh"] - lectura_anterior["lectura_cons_kwh"]
-            inyec_medida = lectura_actual["lectura_inyec_kwh"] - lectura_anterior["lectura_inyec_kwh"]
+            # Consumos en enteros
+            cons_medido = int(round(lectura_actual["lectura_cons_kwh"] - lectura_anterior["lectura_cons_kwh"]))
+            inyec_medida = int(round(lectura_actual["lectura_inyec_kwh"] - lectura_anterior["lectura_inyec_kwh"]))
             neto_medido = cons_medido - inyec_medida
             
-            gen_solar = lectura_actual["generacion_solar_total_kwh"] - lectura_anterior["generacion_solar_total_kwh"]
+            gen_solar = int(round(lectura_actual["generacion_solar_total_kwh"] - lectura_anterior["generacion_solar_total_kwh"]))
             
             cons_diario = cons_medido / dias_transcurridos
             inyec_diaria = inyec_medida / dias_transcurridos
             neto_diario = neto_medido / dias_transcurridos
             
-            # Proyecciones
-            kwh_restantes_proyectados = neto_diario * dias_restantes
+            kwh_restantes_proyectados = int(round(neto_diario * dias_restantes))
             neto_proyectado_total = neto_medido + kwh_restantes_proyectados
             
-            credito_previo = lectura_actual.get("credito_anterior_kwh", 0.0)
+            credito_previo = int(round(lectura_actual.get("credito_anterior_kwh", 0)))
             
             calc_actual = calcular_detalle_factura(neto_medido, credito_previo, tarifa_act)
             calc_proyectado = calcular_detalle_factura(neto_proyectado_total, credito_previo, tarifa_act)
             costo_estimado_dias_restantes = max(0.0, calc_proyectado["total"] - calc_actual["total"])
             
-            # Ahorro solar estimado
-            # Consumo total real del hogar (Autoconsumo + Consumo CFE)
-            autoconsumo_solar = max(0.0, gen_solar - inyec_medida)
+            autoconsumo_solar = max(0, gen_solar - inyec_medida)
             consumo_real_total = cons_medido + autoconsumo_solar
-            calc_sin_paneles = calcular_detalle_factura(consumo_real_total, 0.0, tarifa_act)
+            calc_sin_paneles = calcular_detalle_factura(consumo_real_total, 0, tarifa_act)
             ahorro_solar = max(0.0, calc_sin_paneles["total"] - calc_actual["total"])
             
-            # --- INTERFAZ DEL DASHBOARD ---
             st.subheader(f"📅 Estado al {fecha_act.strftime('%d/%m/%Y')}")
             
-            # Progreso del periodo
             pct_tiempo = min(1.0, (dias_totales_ciclo - dias_restantes) / dias_totales_ciclo)
             st.progress(pct_tiempo, text=f"Progreso del Ciclo CFE: **{dias_totales_ciclo - dias_restantes} de {dias_totales_ciclo} días transcurridos** (Próximo corte: {fin_ciclo.strftime('%d/%m/%Y')})")
             
             st.divider()
             
-            # Fila 1: Métricas de Consumo e Inyección
             col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Tomado de CFE", f"{cons_medido:,.1f} kWh", f"{cons_diario:.1f} kWh/día")
-            col2.metric("Inyectado a CFE", f"{inyec_medida:,.1f} kWh", f"{inyec_diaria:.1f} kWh/día")
-            col3.metric("kWh Netos a Pagar Hoy", f"{calc_actual['kwh_facturables']:,.1f} kWh", help="Consumo neto descontando inyección y crédito acumulado")
+            col1.metric("Tomado de CFE", f"{cons_medido:,} kWh", f"{cons_diario:.1f} kWh/día")
+            col2.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
+            col3.metric("kWh Netos Facturables Hoy", f"{calc_actual['kwh_facturables']:,} kWh")
             col4.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN")
             
             st.divider()
             
-            # Fila 2: Métricas Proyectadas ("Lo que falta")
             st.markdown("### 🔮 Proyección al Cierre de Corte CFE")
             p1, p2, p3, p4 = st.columns(4)
             p1.metric("Días Faltantes para Corte", f"{dias_restantes} días")
-            p2.metric("kWh Estimados por Consumir", f"{kwh_restantes_proyectados:,.1f} kWh", f"{neto_diario:.1f} kWh/día neto")
+            p2.metric("kWh Estimados por Consumir", f"{kwh_restantes_proyectados:,} kWh", f"{neto_diario:.1f} kWh/día neto")
             p3.metric("Costo Estimado Días Restantes", f"${costo_estimado_dias_restantes:,.2f} MXN")
             p4.metric("PROYECCIÓN TOTAL RECIBO", f"${calc_proyectado['total']:,.2f} MXN")
             
@@ -229,17 +213,17 @@ with pestaña1:
                     x="fecha_corte", 
                     y=["lectura_cons_kwh", "lectura_inyec_kwh"],
                     markers=True,
-                    labels={"value": "Lectura Acumulada kWh", "variable": "Concepto", "fecha_corte": "Fecha"},
-                    title="Evolución de Lecturas"
+                    labels={"value": "Lectura Acumulada (kWh)", "variable": "Concepto", "fecha_corte": "Fecha"},
+                    title="Evolución de Lecturas (Enteros)"
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 
             with col_info:
                 st.subheader("Desglose Financiero y Ahorro")
-                st.write(f"• **Crédito en Bolsa Previo:** {credito_previo:.1f} kWh")
+                st.write(f"• **Crédito en Bolsa Previo:** {credito_previo} kWh")
                 
                 if calc_actual['nuevo_credito'] > 0:
-                    st.success(f"🎉 Tienes **{calc_actual['nuevo_credito']} kWh** de saldo a favor acumulado en la bolsa.")
+                    st.success(f"🎉 Tienes **{calc_actual['nuevo_credito']} kWh** de saldo a favor en la bolsa.")
                 
                 st.write("---")
                 st.markdown("#### **Desglose Actual Al Día**")
@@ -252,19 +236,17 @@ with pestaña1:
                 st.markdown(f"### **Total Actual: ${calc_actual['total']:,.2f} MXN**")
                 
                 st.write("---")
-                st.info(f"☀️ **Ahorro Solar del Periodo:** Gracias a tus paneles has ahorrado **${ahorro_solar:,.2f} MXN** comparado con la tarifa normal sin solar.")
+                st.info(f"☀️ **Ahorro Solar del Periodo:** Has ahorrado **${ahorro_solar:,.2f} MXN** gracias a tus paneles.")
         else:
             st.warning("La última lectura registrada no tiene asociada una tarifa válida.")
 
     elif not df.empty and len(df) == 1:
-        st.info("Has registrado tu primera lectura inicial. Agrega una segunda lectura para ver tendencias y proyecciones de días restantes.")
+        st.info("Has registrado tu primera lectura inicial. Agrega una segunda lectura para activar proyecciones.")
     else:
         st.info("👋 **¡Bienvenido!** Dirígete a la pestaña **⚙️ Administración de Tarifas y Ciclo** para configurar tus parámetros de corte.")
 
-# --- PESTAÑA 2: CAPTURAR LECTURA ---
+# --- PESTAÑA 2: CAPTURAR Y EDITAR LECTURAS ---
 with pestaña2:
-    st.subheader("➕ Capturar Lectura del Medidor (Cualquier día)")
-    
     try:
         res_tarifas = supabase.table("tarifas").select("*").execute()
         tarifas_list = res_tarifas.data if res_tarifas.data else []
@@ -273,57 +255,120 @@ with pestaña2:
         
     tarifas_dict = {t["nombre"]: t["id"] for t in tarifas_list} if tarifas_list else {}
     
-    if tarifas_dict:
-        try:
-            res_ultima = supabase.table("lecturas").select("*").order("fecha_corte", desc=True).limit(1).execute()
-            credito_anterior = res_ultima.data[0]["credito_remanente_kwh"] if res_ultima.data else 0.0
-        except Exception:
-            res_ultima = None
-            credito_anterior = 0.0
-        
-        with st.form("form_registro_libre", clear_on_submit=True):
-            fecha = st.date_input("Fecha de Toma de Lectura", value=datetime.now())
+    subtab_lec1, subtab_lec2 = st.tabs(["➕ Capturar Nueva Lectura", "✏️ Editar / Eliminar Lecturas Guardadas"])
+    
+    # 1. CAPTURAR NUEVA LECTURA
+    with subtab_lec1:
+        st.subheader("Ingresar nueva captura del medidor")
+        if tarifas_dict:
+            try:
+                res_ultima = supabase.table("lecturas").select("*").order("fecha_corte", desc=True).limit(1).execute()
+                credito_anterior = int(round(res_ultima.data[0]["credito_remanente_kwh"])) if res_ultima.data else 0
+            except Exception:
+                res_ultima = None
+                credito_anterior = 0
             
-            c_a, c_b = st.columns(2)
-            cons_kwh = c_a.number_input("Lectura Medidor - Consumo (kWh / Código 1.8.0)", min_value=0.0, step=0.1)
-            inyec_kwh = c_b.number_input("Lectura Medidor - Inyección (kWh / Código 2.8.0)", min_value=0.0, step=0.1)
-            
-            solar_kwh = st.number_input("Generación Solar Acumulada Inversor (kWh)", min_value=0.0, step=0.1)
-            tarifa_sel = st.selectbox("Tarifa Aplicable", list(tarifas_dict.keys()))
-            
-            es_cierre = st.checkbox("Marcar como Cierre Oficial de Bimestre / Recibo CFE")
-            notas = st.text_input("Notas (Ej. 'Lectura semanal', 'Corte oficial CFE')")
-            
-            if st.form_submit_button("Guardar Registro"):
-                if res_ultima and res_ultima.data:
-                    u = res_ultima.data[0]
-                    c_periodo = cons_kwh - u["lectura_cons_kwh"]
-                    i_periodo = inyec_kwh - u["lectura_inyec_kwh"]
-                    neto = c_periodo - i_periodo
-                    
-                    t_obj = [t for t in tarifas_list if t["id"] == tarifas_dict[tarifa_sel]][0]
-                    res_calc = calcular_detalle_factura(neto, credito_anterior, t_obj)
-                    
-                    nuevo_rem = res_calc["nuevo_credito"] if es_cierre else credito_anterior
-                else:
-                    nuevo_rem = 0.0
+            with st.form("form_registro_libre", clear_on_submit=True):
+                fecha = st.date_input("Fecha de Toma de Lectura", value=datetime.now())
                 
-                data = {
-                    "fecha_corte": str(fecha),
-                    "lectura_cons_kwh": cons_kwh,
-                    "lectura_inyec_kwh": inyec_kwh,
-                    "generacion_solar_total_kwh": solar_kwh,
-                    "tarifa_id": tarifas_dict[tarifa_sel],
-                    "credito_anterior_kwh": credito_anterior,
-                    "credito_remanente_kwh": nuevo_rem,
-                    "es_cierre_periodo": es_cierre,
-                    "notas": notas
-                }
-                supabase.table("lecturas").insert(data).execute()
-                st.success(f"¡Lectura registrada para el {fecha}!")
-                st.rerun()
-    else:
-        st.warning("Primero debes registrar al menos una tarifa.")
+                c_a, c_b = st.columns(2)
+                cons_kwh = c_a.number_input("Lectura Medidor - Consumo (kWh / Código 1.8.0)", min_value=0, step=1, value=0)
+                inyec_kwh = c_b.number_input("Lectura Medidor - Inyección (kWh / Código 2.8.0)", min_value=0, step=1, value=0)
+                
+                solar_kwh = st.number_input("Generación Solar Acumulada Inversor (kWh)", min_value=0, step=1, value=0)
+                tarifa_sel = st.selectbox("Tarifa Aplicable", list(tarifas_dict.keys()))
+                
+                es_cierre = st.checkbox("Marcar como Cierre Oficial de Bimestre / Recibo CFE")
+                notas = st.text_input("Notas (Ej. 'Lectura semanal', 'Corte oficial CFE')")
+                
+                if st.form_submit_button("Guardar Registro"):
+                    if res_ultima and res_ultima.data:
+                        u = res_ultima.data[0]
+                        c_periodo = cons_kwh - int(round(u["lectura_cons_kwh"]))
+                        i_periodo = inyec_kwh - int(round(u["lectura_inyec_kwh"]))
+                        neto = c_periodo - i_periodo
+                        
+                        t_obj = [t for t in tarifas_list if t["id"] == tarifas_dict[tarifa_sel]][0]
+                        res_calc = calcular_detalle_factura(neto, credito_anterior, t_obj)
+                        
+                        nuevo_rem = res_calc["nuevo_credito"] if es_cierre else credito_anterior
+                    else:
+                        nuevo_rem = 0
+                    
+                    data = {
+                        "fecha_corte": str(fecha),
+                        "lectura_cons_kwh": cons_kwh,
+                        "lectura_inyec_kwh": inyec_kwh,
+                        "generacion_solar_total_kwh": solar_kwh,
+                        "tarifa_id": tarifas_dict[tarifa_sel],
+                        "credito_anterior_kwh": credito_anterior,
+                        "credito_remanente_kwh": nuevo_rem,
+                        "es_cierre_periodo": es_cierre,
+                        "notas": notas
+                    }
+                    supabase.table("lecturas").insert(data).execute()
+                    st.success(f"¡Lectura registrada para el {fecha}!")
+                    st.rerun()
+        else:
+            st.warning("Primero debes registrar al menos una tarifa.")
+
+    # 2. EDITAR / ELIMINAR LECTURAS
+    with subtab_lec2:
+        st.subheader("Consultar o modificar capturas previas")
+        try:
+            res_todas_l = supabase.table("lecturas").select("*, tarifas(nombre)").order("fecha_corte", desc=True).execute()
+            lecturas_list = res_todas_l.data if res_todas_l.data else []
+        except Exception:
+            lecturas_list = []
+            
+        if lecturas_list:
+            opciones_lec = {f"{l['fecha_corte']} - Consumo: {int(round(l['lectura_cons_kwh']))} kWh / Inyección: {int(round(l['lectura_inyec_kwh']))} kWh": l for l in lecturas_list}
+            sel_lec_label = st.selectbox("Selecciona una lectura registrada para editar o eliminar:", list(opciones_lec.keys()))
+            lec_sel = opciones_lec[sel_lec_label]
+            
+            with st.form("form_edit_lectura"):
+                st.markdown(f"#### Modificando Registro ID: {lec_sel['id']}")
+                edit_fecha = st.date_input("Fecha de Lectura", value=datetime.strptime(lec_sel["fecha_corte"], "%Y-%m-%d").date())
+                
+                ec1, ec2 = st.columns(2)
+                edit_cons = ec1.number_input("Lectura Consumo (kWh)", min_value=0, step=1, value=int(round(lec_sel["lectura_cons_kwh"])))
+                edit_inyec = ec2.number_input("Lectura Inyección (kWh)", min_value=0, step=1, value=int(round(lec_sel["lectura_inyec_kwh"])))
+                
+                edit_solar = st.number_input("Generación Solar Total (kWh)", min_value=0, step=1, value=int(round(lec_sel["generacion_solar_total_kwh"])))
+                
+                # Seleccionar tarifa actual
+                idx_tar = 0
+                if tarifas_list and lec_sel.get("tarifa_id"):
+                    ids_t = [t["id"] for t in tarifas_list]
+                    if lec_sel["tarifa_id"] in ids_t:
+                        idx_tar = ids_t.index(lec_sel["tarifa_id"])
+                        
+                edit_tarifa = st.selectbox("Tarifa Aplicada", list(tarifas_dict.keys()), index=idx_tar)
+                edit_cierre = st.checkbox("Es Cierre Oficial de Bimestre", value=bool(lec_sel.get("es_cierre_periodo", False)))
+                edit_notas = st.text_input("Notas", value=lec_sel.get("notas", "") or "")
+                
+                btn_save, btn_del = st.columns(2)
+                
+                if btn_save.form_submit_button("💾 Guardar Cambios"):
+                    data_edit_lec = {
+                        "fecha_corte": str(edit_fecha),
+                        "lectura_cons_kwh": edit_cons,
+                        "lectura_inyec_kwh": edit_inyec,
+                        "generacion_solar_total_kwh": edit_solar,
+                        "tarifa_id": tarifas_dict[edit_tarifa],
+                        "es_cierre_periodo": edit_cierre,
+                        "notas": edit_notas
+                    }
+                    supabase.table("lecturas").update(data_edit_lec).eq("id", lec_sel["id"]).execute()
+                    st.success("¡Lectura modificada correctamente!")
+                    st.rerun()
+                    
+                if btn_del.form_submit_button("🗑️ Eliminar Registro"):
+                    supabase.table("lecturas").delete().eq("id", lec_sel["id"]).execute()
+                    st.success("Lectura eliminada.")
+                    st.rerun()
+        else:
+            st.info("No hay lecturas registradas para editar.")
 
 # --- PESTAÑA 3: EXPORTACIÓN ---
 with pestaña3:
@@ -365,7 +410,7 @@ with pestaña3:
     else:
         st.info("No hay lecturas registradas para exportar.")
 
-# --- PESTAÑA 4: ADMINISTRACIÓN DE TARIFAS Y CICLO ---
+# --- PESTAÑA 4: ADMINISTRACIÓN DE TARIFAS Y CICLO (3 Decimales) ---
 with pestaña4:
     st.subheader("⚙️ Configurar Tarifas y Ciclo de Facturación CFE")
     
@@ -377,7 +422,7 @@ with pestaña4:
         
     subtab1, subtab2 = st.tabs(["✏️ Tarifas Guardadas (Ver / Editar)", "➕ Crear Nueva Tarifa"])
     
-    # 1. VER / EDITAR TARIFAS Y CICLO
+    # 1. VER / EDITAR TARIFAS
     with subtab1:
         if lista_tarifas:
             opciones_t = {t["nombre"]: t for t in lista_tarifas}
@@ -386,7 +431,6 @@ with pestaña4:
             
             with st.form("form_edit_tarifa"):
                 st.markdown(f"#### Editando: **{t_sel['nombre']}**")
-                
                 edit_nombre = st.text_input("Nombre de la Tarifa", value=t_sel["nombre"])
                 
                 st.markdown("#### Configuración de Corte CFE")
@@ -395,23 +439,23 @@ with pestaña4:
                 edit_es_bimestral = c_corte2.selectbox("Periodo de Facturación", ["Bimestral (60 días)", "Mensual (30 días)"], index=0 if t_sel.get("es_bimestral", True) else 1)
                 
                 c1, c2 = st.columns(2)
-                edit_cargo = c1.number_input("Cargo Fijo ($)", min_value=0.0, value=float(t_sel.get("cargo_fijo", 0.0)))
-                edit_iva = c2.number_input("IVA (%)", min_value=0.0, value=float(t_sel.get("porcentaje_iva", 16.0)))
+                edit_cargo = c1.number_input("Cargo Fijo ($)", min_value=0.0, value=float(t_sel.get("cargo_fijo", 0.0)), step=0.001, format="%.3f")
+                edit_iva = c2.number_input("IVA (%)", min_value=0.0, value=float(t_sel.get("porcentaje_iva", 16.0)), step=0.001, format="%.3f")
                 
-                st.markdown("#### Rangos de Consumo (kWh) y Precios ($/kWh)")
+                st.markdown("#### Rangos de Consumo (kWh Enteros) y Precios ($ con 3 decimales)")
                 r1_col, r2_col, r3_col = st.columns(3)
-                edit_lim_b = r1_col.number_input("Límite Básico (kWh)", min_value=1.0, value=float(t_sel.get("limite_basico", 150.0)))
-                edit_p_b = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=float(t_sel.get("precio_basico", 1.087)))
+                edit_lim_b = r1_col.number_input("Límite Básico (kWh)", min_value=1, value=int(round(float(t_sel.get("limite_basico", 150)))), step=1)
+                edit_p_b = r1_col.number_input("Precio Básico ($/kWh)", min_value=0.0, value=float(t_sel.get("precio_basico", 1.087)), step=0.001, format="%.3f")
                 
-                edit_lim_i = r2_col.number_input("Límite Intermedio Acumulado (kWh)", min_value=edit_lim_b, value=float(t_sel.get("limite_intermedio", 280.0)))
-                edit_p_i = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=float(t_sel.get("precio_intermedio", 1.320)))
+                edit_lim_i = r2_col.number_input("Límite Intermedio Acumulado (kWh)", min_value=edit_lim_b, value=int(round(float(t_sel.get("limite_intermedio", 280)))), step=1)
+                edit_p_i = r2_col.number_input("Precio Intermedio ($/kWh)", min_value=0.0, value=float(t_sel.get("precio_intermedio", 1.320)), step=0.001, format="%.3f")
                 
-                edit_p_e = r3_col.number_input("Precio Excedente ($)", min_value=0.0, value=float(t_sel.get("precio_excedente", 3.861)))
+                edit_p_e = r3_col.number_input("Precio Excedente ($/kWh)", min_value=0.0, value=float(t_sel.get("precio_excedente", 3.861)), step=0.001, format="%.3f")
                 
                 st.markdown("#### Alumbrado Público (DAP)")
                 dap_col1, dap_col2 = st.columns(2)
-                edit_dap_pct = dap_col1.number_input("DAP en Porcentaje (%)", min_value=0.0, value=float(t_sel.get("porcentaje_dap", 0.0)))
-                edit_dap_fijo = dap_col2.number_input("DAP en Cuota Fija ($)", min_value=0.0, value=float(t_sel.get("cuota_fija_dap", 0.0)))
+                edit_dap_pct = dap_col1.number_input("DAP en Porcentaje (%)", min_value=0.0, value=float(t_sel.get("porcentaje_dap", 0.0)), step=0.001, format="%.3f")
+                edit_dap_fijo = dap_col2.number_input("DAP en Cuota Fija ($)", min_value=0.0, value=float(t_sel.get("cuota_fija_dap", 0.0)), step=0.001, format="%.3f")
                 
                 if st.form_submit_button("💾 Guardar Cambios"):
                     data_update = {
@@ -428,12 +472,9 @@ with pestaña4:
                         "cuota_fija_dap": edit_dap_fijo,
                         "porcentaje_iva": edit_iva
                     }
-                    try:
-                        supabase.table("tarifas").update(data_update).eq("id", t_sel["id"]).execute()
-                        st.success(f"¡Tarifa '{edit_nombre}' actualizada correctamente!")
-                        st.rerun()
-                    except Exception as err:
-                        st.error(f"Error al actualizar la tarifa: {err}")
+                    supabase.table("tarifas").update(data_update).eq("id", t_sel["id"]).execute()
+                    st.success(f"¡Tarifa '{edit_nombre}' actualizada correctamente!")
+                    st.rerun()
         else:
             st.info("No hay tarifas guardadas para editar.")
 
@@ -448,22 +489,22 @@ with pestaña4:
             es_bimestral = c_corte2.selectbox("Periodo de Facturación", ["Bimestral (60 días)", "Mensual (30 días)"], index=0)
             
             c1, c2 = st.columns(2)
-            cargo_fijo = c1.number_input("Cargo Fijo ($)", min_value=0.0, value=0.0)
-            iva_pct = c2.number_input("IVA (%)", min_value=0.0, value=16.0)
+            cargo_fijo = c1.number_input("Cargo Fijo ($)", min_value=0.0, value=0.0, step=0.001, format="%.3f")
+            iva_pct = c2.number_input("IVA (%)", min_value=0.0, value=16.0, step=0.001, format="%.3f")
             
-            st.markdown("#### Rangos de Consumo (kWh) y Precios ($/kWh)")
+            st.markdown("#### Rangos de Consumo (kWh Enteros) y Precios ($ con 3 decimales)")
             r1_col, r2_col, r3_col = st.columns(3)
-            lim_basico = r1_col.number_input("Límite Básico (kWh)", min_value=1.0, value=150.0)
-            p_basico = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=1.087)
+            lim_basico = r1_col.number_input("Límite Básico (kWh)", min_value=1, value=150, step=1)
+            p_basico = r1_col.number_input("Precio Básico ($/kWh)", min_value=0.0, value=1.087, step=0.001, format="%.3f")
             
-            lim_inter = r2_col.number_input("Límite Intermedio Acumulado (kWh)", min_value=lim_basico, value=280.0)
-            p_inter = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=1.320)
+            lim_inter = r2_col.number_input("Límite Intermedio Acumulado (kWh)", min_value=lim_basico, value=280, step=1)
+            p_inter = r2_col.number_input("Precio Intermedio ($/kWh)", min_value=0.0, value=1.320, step=0.001, format="%.3f")
             
-            p_exced = r3_col.number_input("Precio Excedente ($)", min_value=0.0, value=3.861)
+            p_exced = r3_col.number_input("Precio Excedente ($/kWh)", min_value=0.0, value=3.861, step=0.001, format="%.3f")
             
             dap_col1, dap_col2 = st.columns(2)
-            dap_pct = dap_col1.number_input("DAP en Porcentaje (%)", min_value=0.0, value=0.0)
-            dap_fijo = dap_col2.number_input("DAP en Cuota Fija ($)", min_value=0.0, value=0.0)
+            dap_pct = dap_col1.number_input("DAP en Porcentaje (%)", min_value=0.0, value=0.0, step=0.001, format="%.3f")
+            dap_fijo = dap_col2.number_input("DAP en Cuota Fija ($)", min_value=0.0, value=0.0, step=0.001, format="%.3f")
             
             if st.form_submit_button("➕ Registrar Nueva Tarifa"):
                 data_tarifa = {
@@ -471,18 +512,15 @@ with pestaña4:
                     "dia_corte_cfe": int(dia_corte),
                     "es_bimestral": True if es_bimestral == "Bimestral (60 días)" else False,
                     "cargo_fijo": float(cargo_fijo),
-                    "limite_basico": float(lim_basico),
+                    "limite_basico": int(lim_basico),
                     "precio_basico": float(p_basico),
-                    "limite_intermedio": float(lim_inter),
+                    "limite_intermedio": int(lim_inter),
                     "precio_intermedio": float(p_inter),
                     "precio_excedente": float(p_exced),
                     "porcentaje_dap": float(dap_pct),
                     "cuota_fija_dap": float(dap_fijo),
                     "porcentaje_iva": float(iva_pct)
                 }
-                try:
-                    supabase.table("tarifas").insert(data_tarifa).execute()
-                    st.success(f"Tarifa '{nombre_tarifa}' guardada con éxito.")
-                    st.rerun()
-                except Exception as err:
-                    st.error(f"Error al guardar la tarifa: {err}")
+                supabase.table("tarifas").insert(data_tarifa).execute()
+                st.success(f"Tarifa '{nombre_tarifa}' guardada con éxito.")
+                st.rerun()
