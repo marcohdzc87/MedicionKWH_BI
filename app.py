@@ -162,13 +162,9 @@ with pestaña1:
             
             gen_solar = int(round(lectura_actual["generacion_solar_total_kwh"] - lectura_anterior["generacion_solar_total_kwh"]))
             
-# Fila 1: Métricas de Consumo, Generación e Inyección
-            col1, col2, col3, col4, col5 = st.columns(5)
-            col1.metric("Tomado de CFE", f"{cons_medido:,} kWh", f"{cons_diario:.1f} kWh/día")
-            col2.metric("Generación Solar Total", f"{gen_solar:,} kWh", f"{gen_solar / dias_transcurridos:.1f} kWh/día", help="Energía total producida por tus paneles solares")
-            col3.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
-            col4.metric("kWh Netos a Pagar Hoy", f"{calc_actual['kwh_facturables']:,} kWh")
-            col5.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN")
+            cons_diario = cons_medido / dias_transcurridos
+            inyec_diaria = inyec_medida / dias_transcurridos
+            neto_diario = neto_medido / dias_transcurridos
             
             kwh_restantes_proyectados = int(round(neto_diario * dias_restantes))
             neto_proyectado_total = neto_medido + kwh_restantes_proyectados
