@@ -14,10 +14,10 @@ def init_supabase():
 try:
     supabase = init_supabase()
 except Exception as e:
-    st.error("Error al conectar con Supabase. Verifica tus credenciales en secretos de Streamlit.")
+    st.error("Error al conectar con Supabase. Verifica tus credenciales en los secretos de Streamlit.")
 
 # -----------------------------------------------------------------------------
-# Lógica de Cálculo de Tarifa y Proyección
+# Lógica de Cálculo Dinámico de Tarifa
 # -----------------------------------------------------------------------------
 def calcular_detalle_factura(kwh_netos_periodo, credito_disponible, tarifa):
     balance_kwh = kwh_netos_periodo - credito_disponible
@@ -25,17 +25,19 @@ def calcular_detalle_factura(kwh_netos_periodo, credito_disponible, tarifa):
     if balance_kwh <= 0:
         kwh_facturables = 0.0
         nuevo_credito = abs(balance_kwh)
-        subtotal_energia = tarifa.get("cargo_fijo", 0.0)
+        subtotal_energia = float(tarifa.get("cargo_fijo", 0.0))
         desglose_rangos = {"Básico": 0.0, "Intermedio": 0.0, "Excedente": 0.0}
     else:
         kwh_facturables = balance_kwh
         nuevo_credito = 0.0
         
-        l_basico = tarifa.get("limite_basico", 130.0)
-        l_inter = tarifa.get("limite_intermedio", 150.0)
-        p_basico = tarifa.get("precio_basico", 1.095)
-        p_inter = tarifa.get("precio_intermedio", 1.33)
-        p_exced = tarifa.get("precio_excedente", 3.889)
+        # Límites y precios desde la BD
+        l_basico = float(tarifa.get("limite_basico", 150.0))       # Primeros 150 kWh
+        l_inter = float(tarifa.get("limite_intermedio", 280.0))    # Hasta 280 kWh (150 + 130)
+        
+        p_basico = float(tarifa.get("precio_basico", 1.087))
+        p_inter = float(tarifa.get("precio_intermedio", 1.320))
+        p_exced = float(tarifa.get("precio_excedente", 3.861))
         
         costo_b, costo_i, costo_e = 0.0, 0.0, 0.0
         
@@ -49,16 +51,16 @@ def calcular_detalle_factura(kwh_netos_periodo, credito_disponible, tarifa):
             costo_i = (l_inter - l_basico) * p_inter
             costo_e = (kwh_facturables - l_inter) * p_exced
             
-        subtotal_energia = tarifa.get("cargo_fijo", 0.0) + costo_b + costo_i + costo_e
+        subtotal_energia = float(tarifa.get("cargo_fijo", 0.0)) + costo_b + costo_i + costo_e
         desglose_rangos = {
             "Básico": round(costo_b, 2),
             "Intermedio": round(costo_i, 2),
             "Excedente": round(costo_e, 2)
         }
 
-    dap = tarifa.get("cuota_fija_dap", 0.0) + (subtotal_energia * (tarifa.get("porcentaje_dap", 0.0) / 100.0))
+    dap = float(tarifa.get("cuota_fija_dap", 0.0)) + (subtotal_energia * (float(tarifa.get("porcentaje_dap", 0.0)) / 100.0))
     subtotal_con_dap = subtotal_energia + dap
-    iva = subtotal_con_dap * (tarifa.get("porcentaje_iva", 16.0) / 100.0)
+    iva = subtotal_con_dap * (float(tarifa.get("porcentaje_iva", 16.0)) / 100.0)
     total_factura = subtotal_con_dap + iva
     
     return {
@@ -86,7 +88,7 @@ pestaña1, pestaña2, pestaña3, pestaña4 = st.tabs([
     "📊 Dashboard & Proyección", 
     "➕ Capturar Lectura Libre", 
     "📥 Descargar Exportación",
-    "⚙️ Tarifas"
+    "⚙️ Administración de Tarifas"
 ])
 
 # --- PESTAÑA 1: DASHBOARD ---
@@ -94,7 +96,7 @@ with pestaña1:
     try:
         res_lecturas = supabase.table("lecturas").select("*, tarifas(*)").order("fecha_corte", desc=False).execute()
         df = pd.DataFrame(res_lecturas.data) if res_lecturas.data else pd.DataFrame()
-    except Exception as e:
+    except Exception:
         df = pd.DataFrame()
 
     if not df.empty and len(df) >= 2:
@@ -165,9 +167,9 @@ with pestaña1:
             st.warning("La última lectura registrada no tiene asociada una tarifa válida.")
 
     elif not df.empty and len(df) == 1:
-        st.info("Has registrado tu primera lectura inicial. Agrega una segunda lectura en cualquier fecha para calcular proyecciones.")
+        st.info("Has registrado tu primera lectura inicial. Agrega una segunda lectura para ver tendencias.")
     else:
-        st.info("👋 **¡Bienvenido!** Para comenzar, ve a la pestaña **⚙️ Tarifas** para registrar tu esquema tarifario y luego a **➕ Capturar Lectura Libre**.")
+        st.info("👋 **¡Bienvenido!** Dirígete a la pestaña **⚙️ Administración de Tarifas** para guardar tu tarifa con los datos correctos.")
 
 # --- PESTAÑA 2: CAPTURAR LECTURA ---
 with pestaña2:
@@ -231,13 +233,11 @@ with pestaña2:
                 st.success(f"¡Lectura registrada para el {fecha}!")
                 st.rerun()
     else:
-        st.warning("Primero debes registrar al menos una tarifa en la pestaña '⚙️ Tarifas'.")
+        st.warning("Primero debes registrar al menos una tarifa.")
 
-# --- PESTAÑA 3: DESCARGAR Y EXPORTAR DATOS ---
+# --- PESTAÑA 3: EXPORTACIÓN ---
 with pestaña3:
     st.subheader("📥 Exportación de Lecturas e Historial de Crédito")
-    st.write("Descarga una copia completa de tus registros para llevar un respaldo local o analizarlo en Excel.")
-    
     try:
         res_export = supabase.table("lecturas").select("*, tarifas(nombre)").order("fecha_corte", desc=False).execute()
         df_exp = pd.DataFrame(res_export.data) if res_export.data else pd.DataFrame()
@@ -250,7 +250,6 @@ with pestaña3:
             df_exp.drop(columns=["tarifas"], inplace=True)
             
         st.dataframe(df_exp, use_container_width=True)
-        
         col_csv, col_excel = st.columns(2)
         
         csv_data = df_exp.to_csv(index=False).encode('utf-8')
@@ -272,51 +271,114 @@ with pestaña3:
                 use_container_width=True
             )
         except Exception:
-            col_excel.info("Para activar la descarga en Excel, asegúrate de tener instalada la librería `openpyxl` en tu requirements.txt")
+            col_excel.info("Asegúrate de incluir openpyxl en requirements.txt para descargar en formato Excel.")
     else:
         st.info("No hay lecturas registradas para exportar.")
 
-# --- PESTAÑA 4: TARIFAS ---
+# --- PESTAÑA 4: ADMINISTRACIÓN Y EDICIÓN DE TARIFAS ---
 with pestaña4:
-    st.subheader("Configuración de Tarifas")
-    with st.form("form_tarifa", clear_on_submit=True):
-        nombre_tarifa = st.text_input("Nombre de la Tarifa", placeholder="Ej. Tarifa Residencial / Verano")
+    st.subheader("⚙️ Ver, Editar y Crear Tarifas")
+    
+    try:
+        res_t = supabase.table("tarifas").select("*").order("id", desc=False).execute()
+        lista_tarifas = res_t.data if res_t.data else []
+    except Exception:
+        lista_tarifas = []
         
-        c1, c2 = st.columns(2)
-        cargo_fijo = c1.number_input("Cargo Fijo ($)", min_value=0.0, value=0.0)
-        iva_pct = c2.number_input("IVA (%)", min_value=0.0, value=16.0)
-        
-        st.markdown("#### Rangos de Consumo (kWh) y Precios ($/kWh)")
-        r1_col, r2_col, r3_col = st.columns(3)
-        lim_basico = r1_col.number_input("Límite Básico (kWh)", min_value=1.0, value=130.0)
-        p_basico = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=1.095)
-        
-        lim_inter = r2_col.number_input("Límite Intermedio (kWh)", min_value=lim_basico, value=150.0)
-        p_inter = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=1.33)
-        
-        p_exced = r3_col.number_input("Precio Excedente ($)", min_value=0.0, value=3.889)
-        
-        st.markdown("#### Configuración de DAP")
-        dap_col1, dap_col2 = st.columns(2)
-        dap_pct = dap_col1.number_input("DAP en Porcentaje (%)", min_value=0.0, value=0.0)
-        dap_fijo = dap_col2.number_input("DAP en Cuota Fija ($)", min_value=0.0, value=0.0)
-        
-        if st.form_submit_button("Guardar Tarifa"):
-            data_tarifa = {
-                "nombre": nombre_tarifa,
-                "cargo_fijo": float(cargo_fijo),
-                "limite_basico": float(lim_basico),
-                "precio_basico": float(p_basico),
-                "limite_intermedio": float(lim_inter),
-                "precio_intermedio": float(p_inter),
-                "precio_excedente": float(p_exced),
-                "porcentaje_dap": float(dap_pct),
-                "cuota_fija_dap": float(dap_fijo),
-                "porcentaje_iva": float(iva_pct)
-            }
-            try:
-                supabase.table("tarifas").insert(data_tarifa).execute()
-                st.success(f"Tarifa '{nombre_tarifa}' creada con éxito.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error detallado de Supabase: {e}")
+    subtab1, subtab2 = st.tabs(["✏️ Tarifas Guardadas (Ver / Editar)", "➕ Crear Nueva Tarifa"])
+    
+    # 1. VER / EDITAR TARIFAS
+    with subtab1:
+        if lista_tarifas:
+            opciones_t = {t["nombre"]: t for t in lista_tarifas}
+            tarifa_seleccionada_nombre = st.selectbox("Selecciona una tarifa para editar o consultar:", list(opciones_t.keys()))
+            t_sel = opciones_t[tarifa_seleccionada_nombre]
+            
+            with st.form("form_edit_tarifa"):
+                st.markdown(f"#### Editando: **{t_sel['nombre']}**")
+                
+                edit_nombre = st.text_input("Nombre de la Tarifa", value=t_sel["nombre"])
+                
+                c1, c2 = st.columns(2)
+                edit_cargo = c1.number_input("Cargo Fijo ($)", min_value=0.0, value=float(t_sel.get("cargo_fijo", 0.0)))
+                edit_iva = c2.number_input("IVA (%)", min_value=0.0, value=float(t_sel.get("porcentaje_iva", 16.0)))
+                
+                st.markdown("#### Rangos de Consumo (kWh) y Precios ($/kWh)")
+                r1_col, r2_col, r3_col = st.columns(3)
+                edit_lim_b = r1_col.number_input("Límite Básico (kWh)", min_value=1.0, value=float(t_sel.get("limite_basico", 150.0)), help="Primer bloque (ej. 150 kWh)")
+                edit_p_b = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=float(t_sel.get("precio_basico", 1.087)))
+                
+                edit_lim_i = r2_col.number_input("Límite Intermedio Acumulado (kWh)", min_value=edit_lim_b, value=float(t_sel.get("limite_intermedio", 280.0)), help="Límite acumulado (150 + 130 = 280 kWh)")
+                edit_p_i = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=float(t_sel.get("precio_intermedio", 1.320)))
+                
+                edit_p_e = r3_col.number_input("Precio Excedente ($)", min_value=0.0, value=float(t_sel.get("precio_excedente", 3.861)))
+                
+                st.markdown("#### Alumbrado Público (DAP)")
+                dap_col1, dap_col2 = st.columns(2)
+                edit_dap_pct = dap_col1.number_input("DAP en Porcentaje (%)", min_value=0.0, value=float(t_sel.get("porcentaje_dap", 0.0)))
+                edit_dap_fijo = dap_col2.number_input("DAP en Cuota Fija ($)", min_value=0.0, value=float(t_sel.get("cuota_fija_dap", 0.0)))
+                
+                if st.form_submit_button("💾 Guardar Cambios en Tarifa"):
+                    data_update = {
+                        "nombre": edit_nombre,
+                        "cargo_fijo": edit_cargo,
+                        "limite_basico": edit_lim_b,
+                        "precio_basico": edit_p_b,
+                        "limite_intermedio": edit_lim_i,
+                        "precio_intermedio": edit_p_i,
+                        "precio_excedente": edit_p_e,
+                        "porcentaje_dap": edit_dap_pct,
+                        "cuota_fija_dap": edit_dap_fijo,
+                        "porcentaje_iva": edit_iva
+                    }
+                    try:
+                        supabase.table("tarifas").update(data_update).eq("id", t_sel["id"]).execute()
+                        st.success(f"¡Tarifa '{edit_nombre}' actualizada correctamente!")
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"Error al actualizar la tarifa: {err}")
+        else:
+            st.info("No hay tarifas guardadas para editar.")
+
+    # 2. CREAR NUEVA TARIFA
+    with subtab2:
+        with st.form("form_nueva_tarifa", clear_on_submit=True):
+            nombre_tarifa = st.text_input("Nombre de la Tarifa", placeholder="Ej. Tarifa 1 - Verano")
+            
+            c1, c2 = st.columns(2)
+            cargo_fijo = c1.number_input("Cargo Fijo ($)", min_value=0.0, value=0.0)
+            iva_pct = c2.number_input("IVA (%)", min_value=0.0, value=16.0)
+            
+            st.markdown("#### Rangos de Consumo (kWh) y Precios ($/kWh)")
+            r1_col, r2_col, r3_col = st.columns(3)
+            lim_basico = r1_col.number_input("Límite Básico (kWh)", min_value=1.0, value=150.0)
+            p_basico = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=1.087)
+            
+            lim_inter = r2_col.number_input("Límite Intermedio Acumulado (kWh)", min_value=lim_basico, value=280.0, help="150 iniciales + 130 siguientes = 280 kWh")
+            p_inter = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=1.320)
+            
+            p_exced = r3_col.number_input("Precio Excedente ($)", min_value=0.0, value=3.861)
+            
+            dap_col1, dap_col2 = st.columns(2)
+            dap_pct = dap_col1.number_input("DAP en Porcentaje (%)", min_value=0.0, value=0.0)
+            dap_fijo = dap_col2.number_input("DAP en Cuota Fija ($)", min_value=0.0, value=0.0)
+            
+            if st.form_submit_button("➕ Registrar Nueva Tarifa"):
+                data_tarifa = {
+                    "nombre": nombre_tarifa,
+                    "cargo_fijo": float(cargo_fijo),
+                    "limite_basico": float(lim_basico),
+                    "precio_basico": float(p_basico),
+                    "limite_intermedio": float(lim_inter),
+                    "precio_intermedio": float(p_inter),
+                    "precio_excedente": float(p_exced),
+                    "porcentaje_dap": float(dap_pct),
+                    "cuota_fija_dap": float(dap_fijo),
+                    "porcentaje_iva": float(iva_pct)
+                }
+                try:
+                    supabase.table("tarifas").insert(data_tarifa).execute()
+                    st.success(f"Tarifa '{nombre_tarifa}' guardada con éxito.")
+                    st.rerun()
+                except Exception as err:
+                    st.error(f"Error al guardar la tarifa: {err}")
