@@ -289,10 +289,10 @@ with pestaña4:
         st.markdown("#### Rangos de Consumo (kWh) y Precios ($/kWh)")
         r1_col, r2_col, r3_col = st.columns(3)
         lim_basico = r1_col.number_input("Límite Básico (kWh)", min_value=1.0, value=130.0)
-        p_basico = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=1.33)
+        p_basico = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=1.095)
         
-        lim_inter = r2_col.number_input("Límite Intermedio (kWh)", min_value=lim_basico, value=280.0)
-        p_inter = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=1.095)
+        lim_inter = r2_col.number_input("Límite Intermedio (kWh)", min_value=lim_basico, value=150.0)
+        p_inter = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=1.33)
         
         p_exced = r3_col.number_input("Precio Excedente ($)", min_value=0.0, value=3.889)
         
