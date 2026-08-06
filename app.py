@@ -11,7 +11,10 @@ st.set_page_config(page_title="Gestor Energético CFE & Solar", page_icon="⚡",
 def init_supabase():
     return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-supabase = init_supabase()
+try:
+    supabase = init_supabase()
+except Exception as e:
+    st.error("Error al conectar con Supabase. Verifica tus credenciales en secretos de Streamlit.")
 
 # -----------------------------------------------------------------------------
 # Lógica de Cálculo de Tarifa y Proyección
@@ -22,17 +25,17 @@ def calcular_detalle_factura(kwh_netos_periodo, credito_disponible, tarifa):
     if balance_kwh <= 0:
         kwh_facturables = 0.0
         nuevo_credito = abs(balance_kwh)
-        subtotal_energia = tarifa["cargo_fijo"]
+        subtotal_energia = tarifa.get("cargo_fijo", 0.0)
         desglose_rangos = {"Básico": 0.0, "Intermedio": 0.0, "Excedente": 0.0}
     else:
         kwh_facturables = balance_kwh
         nuevo_credito = 0.0
         
-        l_basico = tarifa["limite_basico"]
-        l_inter = tarifa["limite_intermedio"]
-        p_basico = tarifa["precio_basico"]
-        p_inter = tarifa["precio_intermedio"]
-        p_exced = tarifa["precio_excedente"]
+        l_basico = tarifa.get("limite_basico", 130.0)
+        l_inter = tarifa.get("limite_intermedio", 280.0)
+        p_basico = tarifa.get("precio_basico", 1.33)
+        p_inter = tarifa.get("precio_intermedio", 1.095)
+        p_exced = tarifa.get("precio_excedente", 3.889)
         
         costo_b, costo_i, costo_e = 0.0, 0.0, 0.0
         
@@ -46,16 +49,16 @@ def calcular_detalle_factura(kwh_netos_periodo, credito_disponible, tarifa):
             costo_i = (l_inter - l_basico) * p_inter
             costo_e = (kwh_facturables - l_inter) * p_exced
             
-        subtotal_energia = tarifa["cargo_fijo"] + costo_b + costo_i + costo_e
+        subtotal_energia = tarifa.get("cargo_fijo", 0.0) + costo_b + costo_i + costo_e
         desglose_rangos = {
             "Básico": round(costo_b, 2),
             "Intermedio": round(costo_i, 2),
             "Excedente": round(costo_e, 2)
         }
 
-    dap = tarifa["cuota_fija_dap"] + (subtotal_energia * (tarifa["porcentaje_dap"] / 100.0))
+    dap = tarifa.get("cuota_fija_dap", 0.0) + (subtotal_energia * (tarifa.get("porcentaje_dap", 0.0) / 100.0))
     subtotal_con_dap = subtotal_energia + dap
-    iva = subtotal_con_dap * (tarifa["porcentaje_iva"] / 100.0)
+    iva = subtotal_con_dap * (tarifa.get("porcentaje_iva", 16.0) / 100.0)
     total_factura = subtotal_con_dap + iva
     
     return {
@@ -72,8 +75,7 @@ def generar_excel(df_export):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df_export.to_excel(writer, index=False, sheet_name='Historial_Lecturas')
-    processed_data = output.getvalue()
-    return processed_data
+    return output.getvalue()
 
 # -----------------------------------------------------------------------------
 # Interfaz de Usuario
@@ -117,7 +119,7 @@ with pestaña1:
         credito_previo = lectura_actual.get("credito_anterior_kwh", 0.0)
         tarifa_act = lectura_actual.get("tarifas", {})
         
-        if tarifa_act:
+        if isinstance(tarifa_act, dict) and tarifa_act:
             calc_actual = calcular_detalle_factura(neto_medido, credito_previo, tarifa_act)
             calc_proyectado = calcular_detalle_factura(neto_proyectado, credito_previo, tarifa_act)
             
@@ -160,22 +162,32 @@ with pestaña1:
                 st.write(f"• IVA: ${calc_actual['iva']:,.2f}")
                 st.markdown(f"### **Total hoy: ${calc_actual['total']:,.2f} MXN**")
         else:
-            st.warning("Falta asociar una tarifa válida a la última lectura.")
+            st.warning("La última lectura registrada no tiene asociada una tarifa válida.")
 
-    elif len(df) == 1:
-        st.info("Has guardado tu primera lectura (Lectura Inicial). Agrega una segunda lectura en cualquier fecha para comenzar a calcular proyecciones y tendencias.")
+    elif not df.empty and len(df) == 1:
+        st.info("Has registrado tu primera lectura inicial. Agrega una segunda lectura en cualquier fecha para calcular proyecciones.")
     else:
-        st.info("👋 **¡Bienvenido!** Para comenzar, ve a la pestaña **⚙️ Tarifas** para registrar tu tarifa y luego a **➕ Capturar Lectura Libre** para añadir la primera lectura de tu medidor.")
+        st.info("👋 **¡Bienvenido!** Para comenzar, ve a la pestaña **⚙️ Tarifas** para registrar tu esquema tarifario y luego a **➕ Capturar Lectura Libre**.")
 
 # --- PESTAÑA 2: CAPTURAR LECTURA ---
 with pestaña2:
     st.subheader("➕ Capturar Lectura del Medidor (Cualquier día)")
-    res_tarifas = supabase.table("tarifas").select("*").execute()
-    tarifas_dict = {t["nombre"]: t["id"] for t in res_tarifas.data} if res_tarifas.data else {}
+    
+    try:
+        res_tarifas = supabase.table("tarifas").select("*").execute()
+        tarifas_list = res_tarifas.data if res_tarifas.data else []
+    except Exception:
+        tarifas_list = []
+        
+    tarifas_dict = {t["nombre"]: t["id"] for t in tarifas_list} if tarifas_list else {}
     
     if tarifas_dict:
-        res_ultima = supabase.table("lecturas").select("*").order("fecha_corte", desc=True).limit(1).execute()
-        credito_anterior = res_ultima.data[0]["credito_remanente_kwh"] if res_ultima.data else 0.0
+        try:
+            res_ultima = supabase.table("lecturas").select("*").order("fecha_corte", desc=True).limit(1).execute()
+            credito_anterior = res_ultima.data[0]["credito_remanente_kwh"] if res_ultima.data else 0.0
+        except Exception:
+            res_ultima = None
+            credito_anterior = 0.0
         
         with st.form("form_registro_libre", clear_on_submit=True):
             fecha = st.date_input("Fecha de Toma de Lectura", value=datetime.now())
@@ -191,13 +203,13 @@ with pestaña2:
             notas = st.text_input("Notas (Ej. 'Lectura semanal', 'Corte oficial CFE')")
             
             if st.form_submit_button("Guardar Registro"):
-                if res_ultima.data:
+                if res_ultima and res_ultima.data:
                     u = res_ultima.data[0]
                     c_periodo = cons_kwh - u["lectura_cons_kwh"]
                     i_periodo = inyec_kwh - u["lectura_inyec_kwh"]
                     neto = c_periodo - i_periodo
                     
-                    t_obj = [t for t in res_tarifas.data if t["id"] == tarifas_dict[tarifa_sel]][0]
+                    t_obj = [t for t in tarifas_list if t["id"] == tarifas_dict[tarifa_sel]][0]
                     res_calc = calcular_detalle_factura(neto, credito_anterior, t_obj)
                     
                     nuevo_rem = res_calc["nuevo_credito"] if es_cierre else credito_anterior
@@ -218,14 +230,19 @@ with pestaña2:
                 supabase.table("lecturas").insert(data).execute()
                 st.success(f"¡Lectura registrada para el {fecha}!")
                 st.rerun()
+    else:
+        st.warning("Primero debes registrar al menos una tarifa en la pestaña '⚙️ Tarifas'.")
 
 # --- PESTAÑA 3: DESCARGAR Y EXPORTAR DATOS ---
 with pestaña3:
     st.subheader("📥 Exportación de Lecturas e Historial de Crédito")
     st.write("Descarga una copia completa de tus registros para llevar un respaldo local o analizarlo en Excel.")
     
-    res_export = supabase.table("lecturas").select("*, tarifas(nombre)").order("fecha_corte", desc=False).execute()
-    df_exp = pd.DataFrame(res_export.data)
+    try:
+        res_export = supabase.table("lecturas").select("*, tarifas(nombre)").order("fecha_corte", desc=False).execute()
+        df_exp = pd.DataFrame(res_export.data) if res_export.data else pd.DataFrame()
+    except Exception:
+        df_exp = pd.DataFrame()
     
     if not df_exp.empty:
         if "tarifas" in df_exp.columns:
@@ -236,7 +253,6 @@ with pestaña3:
         
         col_csv, col_excel = st.columns(2)
         
-        # Botón para descargar CSV
         csv_data = df_exp.to_csv(index=False).encode('utf-8')
         col_csv.download_button(
             label="📄 Descargar en formato CSV",
@@ -246,7 +262,6 @@ with pestaña3:
             use_container_width=True
         )
         
-        # Botón para descargar Excel
         try:
             excel_data = generar_excel(df_exp)
             col_excel.download_button(
@@ -256,7 +271,7 @@ with pestaña3:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-        except Exception as e:
+        except Exception:
             col_excel.info("Para activar la descarga en Excel, asegúrate de tener instalada la librería `openpyxl` en tu requirements.txt")
     else:
         st.info("No hay lecturas registradas para exportar.")
@@ -265,21 +280,23 @@ with pestaña3:
 with pestaña4:
     st.subheader("Configuración de Tarifas")
     with st.form("form_tarifa", clear_on_submit=True):
-        nombre_tarifa = st.text_input("Nombre de la Tarifa", placeholder="Ej. Mi Tarifa Personalizada / Tarifa 1")
+        nombre_tarifa = st.text_input("Nombre de la Tarifa", placeholder="Ej. Tarifa Residencial / Verano")
         
         c1, c2 = st.columns(2)
         cargo_fijo = c1.number_input("Cargo Fijo ($)", min_value=0.0, value=0.0)
         iva_pct = c2.number_input("IVA (%)", min_value=0.0, value=16.0)
         
+        st.markdown("#### Rangos de Consumo (kWh) y Precios ($/kWh)")
         r1_col, r2_col, r3_col = st.columns(3)
         lim_basico = r1_col.number_input("Límite Básico (kWh)", min_value=1.0, value=130.0)
-        p_basico = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=1.15)
+        p_basico = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=1.33)
         
-        lim_inter = r2_col.number_input("Límite Intermedio (kWh)", min_value=lim_basico, value=200.0)
-        p_inter = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=2.50)
+        lim_inter = r2_col.number_input("Límite Intermedio (kWh)", min_value=lim_basico, value=280.0)
+        p_inter = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=1.095)
         
-        p_exced = r3_col.number_input("Precio Excedente ($)", min_value=0.0, value=5.00)
+        p_exced = r3_col.number_input("Precio Excedente ($)", min_value=0.0, value=3.889)
         
+        st.markdown("#### Configuración de DAP")
         dap_col1, dap_col2 = st.columns(2)
         dap_pct = dap_col1.number_input("DAP en Porcentaje (%)", min_value=0.0, value=0.0)
         dap_fijo = dap_col2.number_input("DAP en Cuota Fija ($)", min_value=0.0, value=0.0)
