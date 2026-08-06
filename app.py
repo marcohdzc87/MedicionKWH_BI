@@ -27,6 +27,8 @@ except Exception as e:
 # -----------------------------------------------------------------------------
 from growattServer import GrowattApi, Timespan
 
+
+
 def obtener_solar_growatt_directo():
     user = st.secrets.get("GROWATT_USER") or os.getenv("GROWATT_USER")
     pw = st.secrets.get("GROWATT_PASS") or os.getenv("GROWATT_PASS")
@@ -35,26 +37,43 @@ def obtener_solar_growatt_directo():
         return None, "Faltan credenciales GROWATT_USER o GROWATT_PASS."
 
     try:
-        api = GrowattApi(agent_identifier="Android/ShinePhone")
+        api = growattServer.GrowattApi(agent_identifier="Android/ShinePhone")
         api.server_url = 'https://server.growatt.com/'
         
         login = api.login(user, pw)
-        
         if not login or 'user' not in login:
             api.server_url = 'https://server-us.growatt.com/'
             login = api.login(user, pw)
 
         user_id = login['user']['id']
         plant_list = api.plant_list(user_id)
-        plant_id = plant_list['data'][0]['plantId']
         
-        fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+        # Extraer el ID de la planta
+        data_list = plant_list.get('data', [])
+        if not data_list:
+            return None, "No se encontraron plantas solares en esta cuenta."
+            
+        plant_id = data_list[0]['plantId']
         
-        # Uso del enum Timespan.DAY
-        plant_info = api.plant_detail(plant_id, timespan=Timespan.DAY, date=fecha_hoy)
+        # Obtenemos los detalles con compatibilidad para distintas versiones de Timespan
+        try:
+            # Opción A: Intentar usar el Enum en minúscula (day)
+            timespan_day = getattr(growattServer.Timespan, 'day', getattr(growattServer.Timespan, 'DAY', 1))
+            fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+            info = api.plant_detail(plant_id, timespan=timespan_day, date=fecha_hoy)
+        except Exception:
+            # Opción B: Si falla plant_detail, consultamos el resumen general de la planta directamente
+            info = api.plant_info(plant_id)
+
+        # Buscar el valor eTotal en la respuesta
+        e_total_val = info.get('eTotal') or info.get('nominalPower') or info.get('totalEnergy')
         
-        kwh_total = int(round(float(plant_info['eTotal'])))
-        return kwh_total, None
+        if e_total_val is not None:
+            kwh_total = int(round(float(e_total_val)))
+            return kwh_total, None
+        else:
+            return None, f"No se pudo leer eTotal. Respuesta recibida: {info}"
+
     except Exception as e:
         return None, str(e)
 
