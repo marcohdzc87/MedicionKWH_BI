@@ -304,16 +304,19 @@ with pestaña4:
         if st.form_submit_button("Guardar Tarifa"):
             data_tarifa = {
                 "nombre": nombre_tarifa,
-                "cargo_fijo": cargo_fijo,
-                "limite_basico": lim_basico,
-                "precio_basico": p_basico,
-                "limite_intermedio": lim_inter,
-                "precio_intermedio": p_inter,
-                "precio_excedente": p_exced,
-                "porcentaje_dap": dap_pct,
-                "cuota_fija_dap": dap_fijo,
-                "porcentaje_iva": iva_pct
+                "cargo_fijo": float(cargo_fijo),
+                "limite_basico": float(lim_basico),
+                "precio_basico": float(p_basico),
+                "limite_intermedio": float(lim_inter),
+                "precio_intermedio": float(p_inter),
+                "precio_excedente": float(p_exced),
+                "porcentaje_dap": float(dap_pct),
+                "cuota_fija_dap": float(dap_fijo),
+                "porcentaje_iva": float(iva_pct)
             }
-            supabase.table("tarifas").insert(data_tarifa).execute()
-            st.success(f"Tarifa '{nombre_tarifa}' creada con éxito.")
-            st.rerun()
+            try:
+                supabase.table("tarifas").insert(data_tarifa).execute()
+                st.success(f"Tarifa '{nombre_tarifa}' creada con éxito.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error detallado de Supabase: {e}")
