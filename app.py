@@ -33,8 +33,17 @@ def obtener_solar_growatt_directo():
         return None, "Faltan credenciales GROWATT_USER o GROWATT_PASS."
 
     try:
-        api = growattServer.GrowattApi()
+        # Configurar la API indicando el servidor web principal
+        api = growattServer.GrowattApi(agent_identifier="Android/ShinePhone")
+        api.server_url = 'https://server.growatt.com/'
+        
         login = api.login(user, pw)
+        
+        if not login or 'user' not in login:
+            # Reintento con servidor alternativo si falla el primario
+            api.server_url = 'https://server-us.growatt.com/'
+            login = api.login(user, pw)
+
         user_id = login['user']['id']
         plant_list = api.plant_list(user_id)
         plant_id = plant_list['data'][0]['plantId']
