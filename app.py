@@ -138,30 +138,37 @@ with pestaña1:
 
     if not df.empty and len(df) >= 2:
         df["fecha_corte"] = pd.to_datetime(df["fecha_corte"]).dt.date
-        lectura_anterior = df.iloc[-2]
         lectura_actual = df.iloc[-1]
         
         fecha_act = lectura_actual["fecha_corte"]
         tarifa_act = lectura_actual.get("tarifas", {})
         
         if isinstance(tarifa_act, dict) and tarifa_act:
-            dia_corte_cfe = int(tarifa_act.get("dia_corte_cfe", 15))
+            dia_corte_cfe = int(tarifa_act.get("dia_corte_cfe", 18))
             es_bimestral = tarifa_act.get("es_bimestral", True)
             
             inicio_ciclo, fin_ciclo = obtener_fechas_ciclo(fecha_act, dia_corte_cfe, es_bimestral)
+            
+            # Búsqueda del registro inicial del ciclo
+            df_previo = df[df["fecha_corte"] <= inicio_ciclo].sort_values("fecha_corte")
+            if not df_previo.empty:
+                lectura_inicio_ciclo = df_previo.iloc[-1]
+            else:
+                lectura_inicio_ciclo = df.iloc[0]
+                
             dias_totales_ciclo = (fin_ciclo - inicio_ciclo).days
-            dias_transcurridos = (fecha_act - lectura_anterior["fecha_corte"]).days
+            dias_transcurridos = (fecha_act - lectura_inicio_ciclo["fecha_corte"]).days
             dias_transcurridos = max(1, dias_transcurridos)
             
             dias_restantes = (fin_ciclo - fecha_act).days
             dias_restantes = max(0, dias_restantes)
             
-            # Consumos e inyecciones en enteros estrictos
-            cons_medido = max(0, int(round(lectura_actual["lectura_cons_kwh"] - lectura_anterior["lectura_cons_kwh"])))
-            inyec_medida = max(0, int(round(lectura_actual["lectura_inyec_kwh"] - lectura_anterior["lectura_inyec_kwh"])))
+            # Acumulados bimestrales reales
+            cons_medido = max(0, int(round(lectura_actual["lectura_cons_kwh"] - lectura_inicio_ciclo["lectura_cons_kwh"])))
+            inyec_medida = max(0, int(round(lectura_actual["lectura_inyec_kwh"] - lectura_inicio_ciclo["lectura_inyec_kwh"])))
             neto_medido = cons_medido - inyec_medida
             
-            gen_solar = max(0, int(round(lectura_actual["generacion_solar_total_kwh"] - lectura_anterior["generacion_solar_total_kwh"])))
+            gen_solar = max(0, int(round(lectura_actual["generacion_solar_total_kwh"] - lectura_inicio_ciclo["generacion_solar_total_kwh"])))
             gen_solar_acumulada = int(round(lectura_actual["generacion_solar_total_kwh"]))
             
             cons_diario = cons_medido / dias_transcurridos
@@ -186,13 +193,13 @@ with pestaña1:
             st.subheader(f"📅 Estado al {fecha_act.strftime('%d/%m/%Y')}")
             
             pct_tiempo = min(1.0, (dias_totales_ciclo - dias_restantes) / dias_totales_ciclo)
-            st.progress(pct_tiempo, text=f"Progreso del Ciclo CFE: **{dias_totales_ciclo - dias_restantes} de {dias_totales_ciclo} días transcurridos** (Próximo corte: {fin_ciclo.strftime('%d/%m/%Y')})")
+            st.progress(pct_tiempo, text=f"Progreso del Ciclo CFE: **{(fecha_act - inicio_ciclo).days} de {dias_totales_ciclo} días transcurridos** (Próximo corte: {fin_ciclo.strftime('%d/%m/%Y')})")
             
             st.divider()
             
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Tomado de CFE", f"{cons_medido:,} kWh", f"{cons_diario:.1f} kWh/día")
-            col2.metric("Generación Solar Periodo", f"{gen_solar:,} kWh", f"Total Acum: {gen_solar_acumulada:,} kWh", help="Producción en el intervalo")
+            col2.metric("Generación Solar Periodo", f"{gen_solar:,} kWh", f"Total Acum: {gen_solar_acumulada:,} kWh", help="Producción en el ciclo")
             col3.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
             col4.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN", f"Neto: {calc_actual['kwh_facturables']:,} kWh")
             
@@ -227,7 +234,6 @@ with pestaña1:
                     "📈 Odómetros Acumulados"
                 ])
                 
-                # OPCIÓN 1: Barras Agrupadas
                 with v_graf1:
                     if not df_grafica_clean.empty:
                         df_melted = df_grafica_clean.melt(
@@ -255,12 +261,10 @@ with pestaña1:
                     else:
                         st.info("Registra al menos 2 lecturas para visualizar barras agrupadas.")
                         
-                # OPCIÓN 2: GRÁFICA DE ÁREA ROBUSTA (GRAPH OBJECTS)
                 with v_graf2:
                     if not df_grafica_clean.empty:
                         fig2 = go.Figure()
                         
-                        # Área 1: Consumido CFE (Azul)
                         fig2.add_trace(go.Scatter(
                             x=df_grafica_clean["Periodo"],
                             y=df_grafica_clean["Consumido CFE"],
@@ -271,7 +275,6 @@ with pestaña1:
                             fillcolor="rgba(31, 119, 180, 0.3)"
                         ))
                         
-                        # Área 2: Inyectado CFE (Verde)
                         fig2.add_trace(go.Scatter(
                             x=df_grafica_clean["Periodo"],
                             y=df_grafica_clean["Inyectado CFE"],
@@ -282,7 +285,6 @@ with pestaña1:
                             fillcolor="rgba(44, 160, 44, 0.3)"
                         ))
                         
-                        # Área 3: Generación Solar (Naranja)
                         fig2.add_trace(go.Scatter(
                             x=df_grafica_clean["Periodo"],
                             y=df_grafica_clean["Generación Solar"],
@@ -304,7 +306,6 @@ with pestaña1:
                     else:
                         st.info("Registra al menos 2 lecturas para calcular la gráfica de área.")
                         
-                # OPCIÓN 3: Odómetros Acumulados
                 with v_graf3:
                     fig3 = px.line(
                         df, 
@@ -556,7 +557,7 @@ with pestaña4:
                 
                 st.markdown("#### Configuración de Corte CFE")
                 c_corte1, c_corte2 = st.columns(2)
-                edit_dia_corte = c_corte1.number_input("Día de Corte en el Mes (1-31)", min_value=1, max_value=31, value=int(t_sel.get("dia_corte_cfe", 15)))
+                edit_dia_corte = c_corte1.number_input("Día de Corte en el Mes (1-31)", min_value=1, max_value=31, value=int(t_sel.get("dia_corte_cfe", 18)))
                 edit_es_bimestral = c_corte2.selectbox("Periodo de Facturación", ["Bimestral (60 días)", "Mensual (30 días)"], index=0 if t_sel.get("es_bimestral", True) else 1)
                 
                 c1, c2 = st.columns(2)
@@ -606,7 +607,7 @@ with pestaña4:
             
             st.markdown("#### Configuración de Corte CFE")
             c_corte1, c_corte2 = st.columns(2)
-            dia_corte = c_corte1.number_input("Día de Corte en el Mes (1-31)", min_value=1, max_value=31, value=15)
+            dia_corte = c_corte1.number_input("Día de Corte en el Mes (1-31)", min_value=1, max_value=31, value=18)
             es_bimestral = c_corte2.selectbox("Periodo de Facturación", ["Bimestral (60 días)", "Mensual (30 días)"], index=0)
             
             c1, c2 = st.columns(2)
