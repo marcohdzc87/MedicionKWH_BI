@@ -216,17 +216,17 @@ with pestaña1:
                 df_grafica["Consumido CFE"] = df_grafica["lectura_cons_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
                 df_grafica["Inyectado CFE"] = df_grafica["lectura_inyec_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
                 df_grafica["Generación Solar"] = df_grafica["generacion_solar_total_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
-                df_grafica["Saldo Neto CFE"] = df_grafica["Consumido CFE"] - df_grafica["Inyectado CFE"]
                 
                 df_grafica_clean = df_grafica.iloc[1:].copy() if len(df_grafica) > 1 else df_grafica.copy()
                 df_grafica_clean["Periodo"] = df_grafica_clean["fecha_corte"].astype(str)
                 
                 v_graf1, v_graf2, v_graf3 = st.tabs([
                     "📊 Barras Agrupadas (Intervalos)", 
-                    "📉 Saldo Neto (Net Metering)", 
+                    "🌊 Gráfica de Área (3 Medidas)", 
                     "📈 Odómetros Acumulados"
                 ])
                 
+                # OPCIÓN 1: Barras Agrupadas
                 with v_graf1:
                     if not df_grafica_clean.empty:
                         df_melted = df_grafica_clean.melt(
@@ -254,22 +254,34 @@ with pestaña1:
                     else:
                         st.info("Registra al menos 2 lecturas para visualizar barras agrupadas.")
                         
+                # OPCIÓN 2: NUEVA GRÁFICA DE ÁREA (3 MEDIDAS)
                 with v_graf2:
                     if not df_grafica_clean.empty:
-                        fig2 = px.bar(
-                            df_grafica_clean, 
-                            x="Periodo", 
-                            y="Saldo Neto CFE",
-                            text_auto=True,
-                            color="Saldo Neto CFE",
-                            color_continuous_scale=["#2ca02c", "#d62728"],
-                            title="Balance Neto a Facturar (Consumo CFE - Inyección CFE)"
+                        df_melted_area = df_grafica_clean.melt(
+                            id_vars=["Periodo"], 
+                            value_vars=["Consumido CFE", "Inyectado CFE", "Generación Solar"],
+                            var_name="Concepto", 
+                            value_name="kWh"
                         )
-                        fig2.update_layout(yaxis_title="kWh Netos", xaxis_title="Fecha de Corte")
+                        fig2 = px.area(
+                            df_melted_area, 
+                            x="Periodo", 
+                            y="kWh", 
+                            color="Concepto",
+                            line_shape="spline",
+                            color_discrete_map={
+                                "Consumido CFE": "#1f77b4",     # Azul CFE
+                                "Inyectado CFE": "#2ca02c",     # Verde Inyección
+                                "Generación Solar": "#ff7f0e"   # Naranja Solar
+                            },
+                            title="Comparativa de Volúmenes Energéticos (Área por Periodo)"
+                        )
+                        fig2.update_layout(yaxis_title="kWh del Intervalo", xaxis_title="Fecha de Corte")
                         st.plotly_chart(fig2, use_container_width=True)
                     else:
-                        st.info("Registra al menos 2 lecturas para calcular saldo neto.")
+                        st.info("Registra al menos 2 lecturas para calcular la gráfica de área.")
                         
+                # OPCIÓN 3: Odómetros Acumulados
                 with v_graf3:
                     fig3 = px.line(
                         df, 
@@ -308,7 +320,7 @@ with pestaña1:
     else:
         st.info("👋 **¡Bienvenido!** Dirígete a la pestaña **⚙️ Administración de Tarifas y Ciclo** para configurar tus parámetros de corte.")
 
-# --- PESTAÑA 2: CAPTURAR Y EDITAR LECTURAS (CON VALIDACIÓN ESTRUCTURAL DE MINIMOS) ---
+# --- PESTAÑA 2: CAPTURAR Y EDITAR LECTURAS ---
 with pestaña2:
     try:
         res_tarifas = supabase.table("tarifas").select("*").execute()
@@ -332,7 +344,6 @@ with pestaña2:
                 ult_reg = None
                 credito_anterior = 0
             
-            # Mostrar referencias de valores mínimos esperados en la pantalla
             if ult_reg:
                 min_cons = int(round(ult_reg["lectura_cons_kwh"]))
                 min_inyec = int(round(ult_reg["lectura_inyec_kwh"]))
@@ -358,7 +369,6 @@ with pestaña2:
                 notas = st.text_input("Notas (Ej. 'Lectura semanal', 'Corte oficial CFE')")
                 
                 if st.form_submit_button("Guardar Registro"):
-                    # VALIDACIÓN DE LECTURA NO MENOR
                     errores_val = []
                     if ult_reg:
                         if cons_kwh < min_cons:
