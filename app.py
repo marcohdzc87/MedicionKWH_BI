@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 from datetime import datetime, date
 import calendar
 import io
@@ -254,29 +255,51 @@ with pestaña1:
                     else:
                         st.info("Registra al menos 2 lecturas para visualizar barras agrupadas.")
                         
-                # OPCIÓN 2: NUEVA GRÁFICA DE ÁREA (3 MEDIDAS)
+                # OPCIÓN 2: GRÁFICA DE ÁREA ROBUSTA (GRAPH OBJECTS)
                 with v_graf2:
                     if not df_grafica_clean.empty:
-                        df_melted_area = df_grafica_clean.melt(
-                            id_vars=["Periodo"], 
-                            value_vars=["Consumido CFE", "Inyectado CFE", "Generación Solar"],
-                            var_name="Concepto", 
-                            value_name="kWh"
+                        fig2 = go.Figure()
+                        
+                        # Área 1: Consumido CFE (Azul)
+                        fig2.add_trace(go.Scatter(
+                            x=df_grafica_clean["Periodo"],
+                            y=df_grafica_clean["Consumido CFE"],
+                            name="Consumido CFE",
+                            mode="lines+markers",
+                            fill="tozeroy",
+                            line=dict(color="#1f77b4", width=2),
+                            fillcolor="rgba(31, 119, 180, 0.3)"
+                        ))
+                        
+                        # Área 2: Inyectado CFE (Verde)
+                        fig2.add_trace(go.Scatter(
+                            x=df_grafica_clean["Periodo"],
+                            y=df_grafica_clean["Inyectado CFE"],
+                            name="Inyectado CFE",
+                            mode="lines+markers",
+                            fill="tozeroy",
+                            line=dict(color="#2ca02c", width=2),
+                            fillcolor="rgba(44, 160, 44, 0.3)"
+                        ))
+                        
+                        # Área 3: Generación Solar (Naranja)
+                        fig2.add_trace(go.Scatter(
+                            x=df_grafica_clean["Periodo"],
+                            y=df_grafica_clean["Generación Solar"],
+                            name="Generación Solar",
+                            mode="lines+markers",
+                            fill="tozeroy",
+                            line=dict(color="#ff7f0e", width=2),
+                            fillcolor="rgba(255, 127, 14, 0.3)"
+                        ))
+                        
+                        fig2.update_layout(
+                            title="Comparativa de Volúmenes Energéticos (Áreas Superpuestas)",
+                            xaxis_title="Fecha de Corte",
+                            yaxis_title="kWh del Intervalo",
+                            hovermode="x unified",
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
                         )
-                        fig2 = px.area(
-                            df_melted_area, 
-                            x="Periodo", 
-                            y="kWh", 
-                            color="Concepto",
-                            line_shape="spline",
-                            color_discrete_map={
-                                "Consumido CFE": "#1f77b4",     # Azul CFE
-                                "Inyectado CFE": "#2ca02c",     # Verde Inyección
-                                "Generación Solar": "#ff7f0e"   # Naranja Solar
-                            },
-                            title="Comparativa de Volúmenes Energéticos (Área por Periodo)"
-                        )
-                        fig2.update_layout(yaxis_title="kWh del Intervalo", xaxis_title="Fecha de Corte")
                         st.plotly_chart(fig2, use_container_width=True)
                     else:
                         st.info("Registra al menos 2 lecturas para calcular la gráfica de área.")
