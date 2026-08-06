@@ -56,26 +56,31 @@ def obtener_solar_growatt_directo():
             
         plant_id = data_list[0]['plantId']
         
-        # Obtener la lista de dispositivos (inversores) asociados a la planta
+        # Consultar la lista de dispositivos (inversores) de la planta
         devices = api.device_list(plant_id)
         
-        # Buscar el valor eTotal exacto del inversor
         e_total_val = None
+        
+        # Buscar eTotal dentro de los dispositivos devueltos
         if isinstance(devices, list) and len(devices) > 0:
             e_total_val = devices[0].get('eTotal')
-        elif isinstance(devices, dict) and 'data' in devices and len(devices['data']) > 0:
-            e_total_val = devices['data'][0].get('eTotal')
-            
-        # Si no vino en device_list, consultar la lista detallada de planta
+        elif isinstance(devices, dict):
+            dev_data = devices.get('data') or devices.get('deviceList') or []
+            if isinstance(dev_data, list) and len(dev_data) > 0:
+                e_total_val = dev_data[0].get('eTotal')
+
+        # Si no estuvo en device_list, consultar la información general de la planta
         if e_total_val is None:
-            plant_detail_data = api.plant_detail_data(plant_id)
-            e_total_val = plant_detail_data.get('eTotal')
+            p_info = api.plant_info(plant_id)
+            if isinstance(p_info, dict):
+                # Extraer explícitamente eTotal o totalEnergy evitando nominalPower
+                e_total_val = p_info.get('eTotal') or p_info.get('totalEnergy')
 
         if e_total_val is not None:
             kwh_total = int(round(float(e_total_val)))
             return kwh_total, None
         else:
-            return None, f"No se encontró el campo eTotal en la respuesta: {devices}"
+            return None, f"No se pudo extraer el valor eTotal de los dispositivos: {devices}"
 
     except Exception as e:
         return None, str(e)
