@@ -32,9 +32,9 @@ def calcular_detalle_factura(kwh_netos_periodo, credito_disponible, tarifa):
         nuevo_credito = 0.0
         
         l_basico = tarifa.get("limite_basico", 130.0)
-        l_inter = tarifa.get("limite_intermedio", 280.0)
-        p_basico = tarifa.get("precio_basico", 1.33)
-        p_inter = tarifa.get("precio_intermedio", 1.095)
+        l_inter = tarifa.get("limite_intermedio", 150.0)
+        p_basico = tarifa.get("precio_basico", 1.095)
+        p_inter = tarifa.get("precio_intermedio", 1.33)
         p_exced = tarifa.get("precio_excedente", 3.889)
         
         costo_b, costo_i, costo_e = 0.0, 0.0, 0.0
