@@ -54,7 +54,7 @@ def obtener_fechas_ciclo(fecha_actual, dia_corte, es_bimestral=True):
     return inicio_ciclo, fin_ciclo
 
 # -----------------------------------------------------------------------------
-# Lógica de Cálculo Dinámico de Tarifa (Soporta 3 decimales en precios)
+# Lógica de Cálculo Dinámico de Tarifa
 # -----------------------------------------------------------------------------
 def calcular_detalle_factura(kwh_netos_periodo, credito_disponible, tarifa):
     balance_kwh = kwh_netos_periodo - credito_disponible
@@ -155,16 +155,17 @@ with pestaña1:
             dias_restantes = (fin_ciclo - fecha_act).days
             dias_restantes = max(0, dias_restantes)
             
-            # Consumos en enteros
-            cons_medido = int(round(lectura_actual["lectura_cons_kwh"] - lectura_anterior["lectura_cons_kwh"]))
-            inyec_medida = int(round(lectura_actual["lectura_inyec_kwh"] - lectura_anterior["lectura_inyec_kwh"]))
+            # Consumos e inyecciones en enteros
+            cons_medido = max(0, int(round(lectura_actual["lectura_cons_kwh"] - lectura_anterior["lectura_cons_kwh"])))
+            inyec_medida = max(0, int(round(lectura_actual["lectura_inyec_kwh"] - lectura_anterior["lectura_inyec_kwh"])))
             neto_medido = cons_medido - inyec_medida
             
-            gen_solar = int(round(lectura_actual["generacion_solar_total_kwh"] - lectura_anterior["generacion_solar_total_kwh"]))
+            gen_solar = max(0, int(round(lectura_actual["generacion_solar_total_kwh"] - lectura_anterior["generacion_solar_total_kwh"])))
             
             cons_diario = cons_medido / dias_transcurridos
             inyec_diaria = inyec_medida / dias_transcurridos
             neto_diario = neto_medido / dias_transcurridos
+            gen_solar_diaria = gen_solar / dias_transcurridos
             
             kwh_restantes_proyectados = int(round(neto_diario * dias_restantes))
             neto_proyectado_total = neto_medido + kwh_restantes_proyectados
@@ -187,16 +188,17 @@ with pestaña1:
             
             st.divider()
             
-# Fila 1: Métricas de Consumo, Generación e Inyección
+            # Fila 1: 5 Métricas Principales
             col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Tomado de CFE", f"{cons_medido:,} kWh", f"{cons_diario:.1f} kWh/día")
-            col2.metric("Generación Solar Total", f"{gen_solar:,} kWh", f"{gen_solar / dias_transcurridos:.1f} kWh/día", help="Energía total producida por tus paneles solares")
+            col2.metric("Generación Solar Total", f"{gen_solar:,} kWh", f"{gen_solar_diaria:.1f} kWh/día")
             col3.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
             col4.metric("kWh Netos a Pagar Hoy", f"{calc_actual['kwh_facturables']:,} kWh")
             col5.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN")
             
             st.divider()
             
+            # Fila 2: Métricas Proyectadas
             st.markdown("### 🔮 Proyección al Cierre de Corte CFE")
             p1, p2, p3, p4 = st.columns(4)
             p1.metric("Días Faltantes para Corte", f"{dias_restantes} días")
@@ -209,16 +211,79 @@ with pestaña1:
             col_graf, col_info = st.columns([2, 1])
             
             with col_graf:
-                st.subheader("Historial de Lecturas del Medidor e Inversor")
-                fig = px.line(
-                    df, 
-                    x="fecha_corte", 
-                    y=["lectura_cons_kwh", "lectura_inyec_kwh", "generacion_solar_total_kwh"],
-                    markers=True,
-                    labels={"value": "Lectura Acumulada (kWh)", "variable": "Concepto", "fecha_corte": "Fecha"},
-                    title="Evolución de Lecturas (Consumo, Inyección y Producción Solar)"
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                st.subheader("Visualización del Historial de Energía")
+                
+                # --- PREPARACIÓN DE DATOS DIFERENCIALES (.diff()) ---
+                df_grafica = df.sort_values("fecha_corte").copy()
+                df_grafica["Consumido CFE"] = df_grafica["lectura_cons_kwh"].diff().apply(lambda x: max(0, x) if pd.notnull(x) else x)
+                df_grafica["Inyectado CFE"] = df_grafica["lectura_inyec_kwh"].diff().apply(lambda x: max(0, x) if pd.notnull(x) else x)
+                df_grafica["Generación Solar"] = df_grafica["generacion_solar_total_kwh"].diff().apply(lambda x: max(0, x) if pd.notnull(x) else x)
+                df_grafica["Saldo Neto CFE"] = df_grafica["Consumido CFE"] - df_grafica["Inyectado CFE"]
+                
+                df_grafica_clean = df_grafica.dropna(subset=["Consumido CFE"]).copy()
+                df_grafica_clean["Periodo"] = df_grafica_clean["fecha_corte"].astype(str)
+                
+                # Selector de formato de gráfica
+                v_graf1, v_graf2, v_graf3 = st.tabs([
+                    "📊 Barras Agrupadas (Intervalos)", 
+                    "📉 Saldo Neto (Net Metering)", 
+                    "📈 Odómetros Acumulados"
+                ])
+                
+                # OPCIÓN 1: Barras Agrupadas por Intervalo
+                with v_graf1:
+                    if not df_grafica_clean.empty:
+                        df_melted = df_grafica_clean.melt(
+                            id_vars=["Periodo"], 
+                            value_vars=["Consumido CFE", "Inyectado CFE", "Generación Solar"],
+                            var_name="Concepto", 
+                            value_name="kWh"
+                        )
+                        fig1 = px.bar(
+                            df_melted, 
+                            x="Periodo", 
+                            y="kWh", 
+                            color="Concepto",
+                            barmode="group",
+                            text_auto=True,
+                            color_discrete_map={
+                                "Consumido CFE": "#1f77b4",
+                                "Inyectado CFE": "#2ca02c",
+                                "Generación Solar": "#ff7f0e"
+                            },
+                            title="Energía del Intervalo (kWh Reales por Toma)"
+                        )
+                        st.plotly_chart(fig1, use_container_width=True)
+                    else:
+                        st.info("Registra al menos 2 lecturas para visualizar barras agrupadas.")
+                        
+                # OPCIÓN 2: Saldo Neto por Periodo
+                with v_graf2:
+                    if not df_grafica_clean.empty:
+                        fig2 = px.bar(
+                            df_grafica_clean, 
+                            x="Periodo", 
+                            y="Saldo Neto CFE",
+                            text_auto=True,
+                            color="Saldo Neto CFE",
+                            color_continuous_scale=["#2ca02c", "#d62728"],
+                            title="Balance Neto a Facturar (Consumo CFE - Inyección CFE)"
+                        )
+                        st.plotly_chart(fig2, use_container_width=True)
+                    else:
+                        st.info("Registra al menos 2 lecturas para calcular saldo neto.")
+                        
+                # OPCIÓN 3: Líneas de Odómetros Acumulados
+                with v_graf3:
+                    fig3 = px.line(
+                        df, 
+                        x="fecha_corte", 
+                        y=["lectura_cons_kwh", "lectura_inyec_kwh", "generacion_solar_total_kwh"],
+                        markers=True,
+                        labels={"value": "Lectura Acumulada (kWh)", "variable": "Concepto", "fecha_corte": "Fecha"},
+                        title="Evolución Continua de Contadores Brutoss"
+                    )
+                    st.plotly_chart(fig3, use_container_width=True)
                 
             with col_info:
                 st.subheader("Desglose Financiero y Ahorro")
@@ -338,7 +403,6 @@ with pestaña2:
                 
                 edit_solar = st.number_input("Generación Solar Total (kWh)", min_value=0, step=1, value=int(round(lec_sel["generacion_solar_total_kwh"])))
                 
-                # Seleccionar tarifa actual
                 idx_tar = 0
                 if tarifas_list and lec_sel.get("tarifa_id"):
                     ids_t = [t["id"] for t in tarifas_list]
@@ -412,7 +476,7 @@ with pestaña3:
     else:
         st.info("No hay lecturas registradas para exportar.")
 
-# --- PESTAÑA 4: ADMINISTRACIÓN DE TARIFAS Y CICLO (3 Decimales) ---
+# --- PESTAÑA 4: ADMINISTRACIÓN DE TARIFAS Y CICLO ---
 with pestaña4:
     st.subheader("⚙️ Configurar Tarifas y Ciclo de Facturación CFE")
     
