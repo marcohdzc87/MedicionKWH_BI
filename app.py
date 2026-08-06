@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, date, timedelta
+import calendar
 import io
 from supabase import create_client
 
@@ -15,6 +16,49 @@ try:
     supabase = init_supabase()
 except Exception as e:
     st.error("Error al conectar con Supabase. Verifica tus credenciales en los secretos de Streamlit.")
+
+# -----------------------------------------------------------------------------
+# Lógica de Cálculo de Días y Fechas de Ciclo
+# -----------------------------------------------------------------------------
+def obtener_fechas_ciclo(fecha_actual, dia_corte, es_bimestral=True):
+    """
+    Calcula el inicio y fin del ciclo de facturación según el día de corte y periodicidad.
+    """
+    año = fecha_actual.year
+    mes = fecha_actual.month
+    
+    # Ajustar día de corte si el mes actual tiene menos días
+    dias_en_mes = calendar.monthrange(año, mes)[1]
+    dia_efectivo = min(dia_corte, dias_en_mes)
+    
+    if fecha_actual.day >= dia_efectivo:
+        # El ciclo actual comenzó este mes en el día de corte
+        inicio_ciclo = date(año, mes, dia_efectivo)
+        meses_a_sumar = 2 if es_bimestral else 1
+        
+        # Calcular fecha fin
+        mes_fin = mes + meses_a_sumar
+        año_fin = año
+        if mes_fin > 12:
+            mes_fin -= 12
+            año_fin += 1
+            
+        dias_en_mes_fin = calendar.monthrange(año_fin, mes_fin)[1]
+        fin_ciclo = date(año_fin, mes_fin, min(dia_corte, dias_en_mes_fin))
+    else:
+        # El ciclo actual comenzó en un periodo anterior
+        meses_a_restar = 2 if es_bimestral else 1
+        mes_inicio = mes - meses_a_restar
+        año_inicio = año
+        if mes_inicio < 1:
+            mes_inicio += 12
+            año_inicio -= 1
+            
+        dias_en_mes_inicio = calendar.monthrange(año_inicio, mes_inicio)[1]
+        inicio_ciclo = date(año_inicio, mes_inicio, min(dia_corte, dias_en_mes_inicio))
+        fin_ciclo = date(año, mes, dia_efectivo)
+        
+    return inicio_ciclo, fin_ciclo
 
 # -----------------------------------------------------------------------------
 # Lógica de Cálculo Dinámico de Tarifa
@@ -31,9 +75,8 @@ def calcular_detalle_factura(kwh_netos_periodo, credito_disponible, tarifa):
         kwh_facturables = balance_kwh
         nuevo_credito = 0.0
         
-        # Límites y precios desde la BD
-        l_basico = float(tarifa.get("limite_basico", 150.0))       # Primeros 150 kWh
-        l_inter = float(tarifa.get("limite_intermedio", 280.0))    # Hasta 280 kWh (150 + 130)
+        l_basico = float(tarifa.get("limite_basico", 150.0))
+        l_inter = float(tarifa.get("limite_intermedio", 280.0))
         
         p_basico = float(tarifa.get("precio_basico", 1.087))
         p_inter = float(tarifa.get("precio_intermedio", 1.320))
@@ -85,10 +128,10 @@ def generar_excel(df_export):
 st.title("⚡ Gestor Energético Bidireccional CFE & Solar")
 
 pestaña1, pestaña2, pestaña3, pestaña4 = st.tabs([
-    "📊 Dashboard & Proyección", 
+    "📊 Dashboard & Proyección Detallada", 
     "➕ Capturar Lectura Libre", 
     "📥 Descargar Exportación",
-    "⚙️ Administración de Tarifas"
+    "⚙️ Administración de Tarifas y Ciclo"
 ])
 
 # --- PESTAÑA 1: DASHBOARD ---
@@ -100,76 +143,123 @@ with pestaña1:
         df = pd.DataFrame()
 
     if not df.empty and len(df) >= 2:
-        df["fecha_corte"] = pd.to_datetime(df["fecha_corte"])
+        df["fecha_corte"] = pd.to_datetime(df["fecha_corte"]).dt.date
         lectura_anterior = df.iloc[-2]
         lectura_actual = df.iloc[-1]
         
-        dias_transcurridos = (lectura_actual["fecha_corte"] - lectura_anterior["fecha_corte"]).days
-        dias_transcurridos = max(1, dias_transcurridos)
-        
-        cons_medido = lectura_actual["lectura_cons_kwh"] - lectura_anterior["lectura_cons_kwh"]
-        inyec_medida = lectura_actual["lectura_inyec_kwh"] - lectura_anterior["lectura_inyec_kwh"]
-        neto_medido = cons_medido - inyec_medida
-        
-        cons_diario = cons_medido / dias_transcurridos
-        inyec_diaria = inyec_medida / dias_transcurridos
-        neto_diario = neto_medido / dias_transcurridos
-        
-        DIAS_PERIODO = 60
-        neto_proyectado = neto_diario * DIAS_PERIODO
-        
-        credito_previo = lectura_actual.get("credito_anterior_kwh", 0.0)
+        fecha_act = lectura_actual["fecha_corte"]
         tarifa_act = lectura_actual.get("tarifas", {})
         
         if isinstance(tarifa_act, dict) and tarifa_act:
+            # Datos de configuración del ciclo CFE
+            dia_corte_cfe = int(tarifa_act.get("dia_corte_cfe", 15))
+            es_bimestral = tarifa_act.get("es_bimestral", True)
+            
+            # Cálculo de fechas de ciclo
+            inicio_ciclo, fin_ciclo = obtener_fechas_ciclo(fecha_act, dia_corte_cfe, es_bimestral)
+            dias_totales_ciclo = (fin_ciclo - inicio_ciclo).days
+            dias_transcurridos = (fecha_act - lectura_anterior["fecha_corte"]).days
+            dias_transcurridos = max(1, dias_transcurridos)
+            
+            dias_restantes = (fin_ciclo - fecha_act).days
+            dias_restantes = max(0, dias_restantes)
+            
+            # Consumos y promedios
+            cons_medido = lectura_actual["lectura_cons_kwh"] - lectura_anterior["lectura_cons_kwh"]
+            inyec_medida = lectura_actual["lectura_inyec_kwh"] - lectura_anterior["lectura_inyec_kwh"]
+            neto_medido = cons_medido - inyec_medida
+            
+            gen_solar = lectura_actual["generacion_solar_total_kwh"] - lectura_anterior["generacion_solar_total_kwh"]
+            
+            cons_diario = cons_medido / dias_transcurridos
+            inyec_diaria = inyec_medida / dias_transcurridos
+            neto_diario = neto_medido / dias_transcurridos
+            
+            # Proyecciones
+            kwh_restantes_proyectados = neto_diario * dias_restantes
+            neto_proyectado_total = neto_medido + kwh_restantes_proyectados
+            
+            credito_previo = lectura_actual.get("credito_anterior_kwh", 0.0)
+            
             calc_actual = calcular_detalle_factura(neto_medido, credito_previo, tarifa_act)
-            calc_proyectado = calcular_detalle_factura(neto_proyectado, credito_previo, tarifa_act)
+            calc_proyectado = calcular_detalle_factura(neto_proyectado_total, credito_previo, tarifa_act)
+            costo_estimado_dias_restantes = max(0.0, calc_proyectado["total"] - calc_actual["total"])
             
-            st.subheader(f"📅 Estado al {lectura_actual['fecha_corte'].strftime('%d/%m/%Y')} ({dias_transcurridos} días medidos)")
+            # Ahorro solar estimado
+            # Consumo total real del hogar (Autoconsumo + Consumo CFE)
+            autoconsumo_solar = max(0.0, gen_solar - inyec_medida)
+            consumo_real_total = cons_medido + autoconsumo_solar
+            calc_sin_paneles = calcular_detalle_factura(consumo_real_total, 0.0, tarifa_act)
+            ahorro_solar = max(0.0, calc_sin_paneles["total"] - calc_actual["total"])
             
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Consumido CFE", f"{cons_medido:,.1f} kWh", f"{cons_diario:.1f} kWh/día")
-            c2.metric("Inyectado CFE", f"{inyec_medida:,.1f} kWh", f"{inyec_diaria:.1f} kWh/día")
-            c3.metric("Monto Actual Al Día", f"${calc_actual['total']:,.2f} MXN")
-            c4.metric("Proyección Fin de Bimestre", f"${calc_proyectado['total']:,.2f} MXN")
+            # --- INTERFAZ DEL DASHBOARD ---
+            st.subheader(f"📅 Estado al {fecha_act.strftime('%d/%m/%Y')}")
+            
+            # Progreso del periodo
+            pct_tiempo = min(1.0, (dias_totales_ciclo - dias_restantes) / dias_totales_ciclo)
+            st.progress(pct_tiempo, text=f"Progreso del Ciclo CFE: **{dias_totales_ciclo - dias_restantes} de {dias_totales_ciclo} días transcurridos** (Próximo corte: {fin_ciclo.strftime('%d/%m/%Y')})")
+            
+            st.divider()
+            
+            # Fila 1: Métricas de Consumo e Inyección
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Tomado de CFE", f"{cons_medido:,.1f} kWh", f"{cons_diario:.1f} kWh/día")
+            col2.metric("Inyectado a CFE", f"{inyec_medida:,.1f} kWh", f"{inyec_diaria:.1f} kWh/día")
+            col3.metric("kWh Netos a Pagar Hoy", f"{calc_actual['kwh_facturables']:,.1f} kWh", help="Consumo neto descontando inyección y crédito acumulado")
+            col4.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN")
+            
+            st.divider()
+            
+            # Fila 2: Métricas Proyectadas ("Lo que falta")
+            st.markdown("### 🔮 Proyección al Cierre de Corte CFE")
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric("Días Faltantes para Corte", f"{dias_restantes} días")
+            p2.metric("kWh Estimados por Consumir", f"{kwh_restantes_proyectados:,.1f} kWh", f"{neto_diario:.1f} kWh/día neto")
+            p3.metric("Costo Estimado Días Restantes", f"${costo_estimado_dias_restantes:,.2f} MXN")
+            p4.metric("PROYECCIÓN TOTAL RECIBO", f"${calc_proyectado['total']:,.2f} MXN")
             
             st.divider()
             
             col_graf, col_info = st.columns([2, 1])
             
             with col_graf:
-                st.subheader("Historial de Lecturas de Medidor")
+                st.subheader("Historial de Lecturas del Medidor")
                 fig = px.line(
                     df, 
                     x="fecha_corte", 
                     y=["lectura_cons_kwh", "lectura_inyec_kwh"],
                     markers=True,
                     labels={"value": "Lectura Acumulada kWh", "variable": "Concepto", "fecha_corte": "Fecha"},
-                    title="Evolución de Lecturas del Medidor Bidireccional"
+                    title="Evolución de Lecturas"
                 )
                 st.plotly_chart(fig, use_container_width=True)
                 
             with col_info:
-                st.subheader("Detalle del Periodo Medido")
-                st.write(f"• **Saldo Crédito Anterior:** {credito_previo:.1f} kWh")
+                st.subheader("Desglose Financiero y Ahorro")
+                st.write(f"• **Crédito en Bolsa Previo:** {credito_previo:.1f} kWh")
+                
                 if calc_actual['nuevo_credito'] > 0:
-                    st.success(f"A la fecha tienes **{calc_actual['nuevo_credito']} kWh** a favor en tu bolsa de crédito.")
-                else:
-                    st.warning(f"Llevas **{calc_actual['kwh_facturables']} kWh** netos a pagar.")
-                    
+                    st.success(f"🎉 Tienes **{calc_actual['nuevo_credito']} kWh** de saldo a favor acumulado en la bolsa.")
+                
                 st.write("---")
-                st.markdown("### **Desglose Actual**")
-                st.write(f"• Energía: ${calc_actual['subtotal_energia']:,.2f}")
+                st.markdown("#### **Desglose Actual Al Día**")
+                st.write(f"• Energía Subtotal: ${calc_actual['subtotal_energia']:,.2f}")
+                st.write(f"  - Escalón Básico: ${calc_actual['desglose_rangos']['Básico']:,.2f}")
+                st.write(f"  - Escalón Intermedio: ${calc_actual['desglose_rangos']['Intermedio']:,.2f}")
+                st.write(f"  - Escalón Excedente: ${calc_actual['desglose_rangos']['Excedente']:,.2f}")
                 st.write(f"• DAP: ${calc_actual['dap']:,.2f}")
                 st.write(f"• IVA: ${calc_actual['iva']:,.2f}")
-                st.markdown(f"### **Total hoy: ${calc_actual['total']:,.2f} MXN**")
+                st.markdown(f"### **Total Actual: ${calc_actual['total']:,.2f} MXN**")
+                
+                st.write("---")
+                st.info(f"☀️ **Ahorro Solar del Periodo:** Gracias a tus paneles has ahorrado **${ahorro_solar:,.2f} MXN** comparado con la tarifa normal sin solar.")
         else:
             st.warning("La última lectura registrada no tiene asociada una tarifa válida.")
 
     elif not df.empty and len(df) == 1:
-        st.info("Has registrado tu primera lectura inicial. Agrega una segunda lectura para ver tendencias.")
+        st.info("Has registrado tu primera lectura inicial. Agrega una segunda lectura para ver tendencias y proyecciones de días restantes.")
     else:
-        st.info("👋 **¡Bienvenido!** Dirígete a la pestaña **⚙️ Administración de Tarifas** para guardar tu tarifa con los datos correctos.")
+        st.info("👋 **¡Bienvenido!** Dirígete a la pestaña **⚙️ Administración de Tarifas y Ciclo** para configurar tus parámetros de corte.")
 
 # --- PESTAÑA 2: CAPTURAR LECTURA ---
 with pestaña2:
@@ -275,9 +365,9 @@ with pestaña3:
     else:
         st.info("No hay lecturas registradas para exportar.")
 
-# --- PESTAÑA 4: ADMINISTRACIÓN Y EDICIÓN DE TARIFAS ---
+# --- PESTAÑA 4: ADMINISTRACIÓN DE TARIFAS Y CICLO ---
 with pestaña4:
-    st.subheader("⚙️ Ver, Editar y Crear Tarifas")
+    st.subheader("⚙️ Configurar Tarifas y Ciclo de Facturación CFE")
     
     try:
         res_t = supabase.table("tarifas").select("*").order("id", desc=False).execute()
@@ -287,11 +377,11 @@ with pestaña4:
         
     subtab1, subtab2 = st.tabs(["✏️ Tarifas Guardadas (Ver / Editar)", "➕ Crear Nueva Tarifa"])
     
-    # 1. VER / EDITAR TARIFAS
+    # 1. VER / EDITAR TARIFAS Y CICLO
     with subtab1:
         if lista_tarifas:
             opciones_t = {t["nombre"]: t for t in lista_tarifas}
-            tarifa_seleccionada_nombre = st.selectbox("Selecciona una tarifa para editar o consultar:", list(opciones_t.keys()))
+            tarifa_seleccionada_nombre = st.selectbox("Selecciona una tarifa para editar:", list(opciones_t.keys()))
             t_sel = opciones_t[tarifa_seleccionada_nombre]
             
             with st.form("form_edit_tarifa"):
@@ -299,16 +389,21 @@ with pestaña4:
                 
                 edit_nombre = st.text_input("Nombre de la Tarifa", value=t_sel["nombre"])
                 
+                st.markdown("#### Configuración de Corte CFE")
+                c_corte1, c_corte2 = st.columns(2)
+                edit_dia_corte = c_corte1.number_input("Día de Corte en el Mes (1-31)", min_value=1, max_value=31, value=int(t_sel.get("dia_corte_cfe", 15)))
+                edit_es_bimestral = c_corte2.selectbox("Periodo de Facturación", ["Bimestral (60 días)", "Mensual (30 días)"], index=0 if t_sel.get("es_bimestral", True) else 1)
+                
                 c1, c2 = st.columns(2)
                 edit_cargo = c1.number_input("Cargo Fijo ($)", min_value=0.0, value=float(t_sel.get("cargo_fijo", 0.0)))
                 edit_iva = c2.number_input("IVA (%)", min_value=0.0, value=float(t_sel.get("porcentaje_iva", 16.0)))
                 
                 st.markdown("#### Rangos de Consumo (kWh) y Precios ($/kWh)")
                 r1_col, r2_col, r3_col = st.columns(3)
-                edit_lim_b = r1_col.number_input("Límite Básico (kWh)", min_value=1.0, value=float(t_sel.get("limite_basico", 150.0)), help="Primer bloque (ej. 150 kWh)")
+                edit_lim_b = r1_col.number_input("Límite Básico (kWh)", min_value=1.0, value=float(t_sel.get("limite_basico", 150.0)))
                 edit_p_b = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=float(t_sel.get("precio_basico", 1.087)))
                 
-                edit_lim_i = r2_col.number_input("Límite Intermedio Acumulado (kWh)", min_value=edit_lim_b, value=float(t_sel.get("limite_intermedio", 280.0)), help="Límite acumulado (150 + 130 = 280 kWh)")
+                edit_lim_i = r2_col.number_input("Límite Intermedio Acumulado (kWh)", min_value=edit_lim_b, value=float(t_sel.get("limite_intermedio", 280.0)))
                 edit_p_i = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=float(t_sel.get("precio_intermedio", 1.320)))
                 
                 edit_p_e = r3_col.number_input("Precio Excedente ($)", min_value=0.0, value=float(t_sel.get("precio_excedente", 3.861)))
@@ -318,9 +413,11 @@ with pestaña4:
                 edit_dap_pct = dap_col1.number_input("DAP en Porcentaje (%)", min_value=0.0, value=float(t_sel.get("porcentaje_dap", 0.0)))
                 edit_dap_fijo = dap_col2.number_input("DAP en Cuota Fija ($)", min_value=0.0, value=float(t_sel.get("cuota_fija_dap", 0.0)))
                 
-                if st.form_submit_button("💾 Guardar Cambios en Tarifa"):
+                if st.form_submit_button("💾 Guardar Cambios"):
                     data_update = {
                         "nombre": edit_nombre,
+                        "dia_corte_cfe": edit_dia_corte,
+                        "es_bimestral": True if edit_es_bimestral == "Bimestral (60 días)" else False,
                         "cargo_fijo": edit_cargo,
                         "limite_basico": edit_lim_b,
                         "precio_basico": edit_p_b,
@@ -343,7 +440,12 @@ with pestaña4:
     # 2. CREAR NUEVA TARIFA
     with subtab2:
         with st.form("form_nueva_tarifa", clear_on_submit=True):
-            nombre_tarifa = st.text_input("Nombre de la Tarifa", placeholder="Ej. Tarifa 1 - Verano")
+            nombre_tarifa = st.text_input("Nombre de la Tarifa", placeholder="Ej. Tarifa Residencial / Verano")
+            
+            st.markdown("#### Configuración de Corte CFE")
+            c_corte1, c_corte2 = st.columns(2)
+            dia_corte = c_corte1.number_input("Día de Corte en el Mes (1-31)", min_value=1, max_value=31, value=15)
+            es_bimestral = c_corte2.selectbox("Periodo de Facturación", ["Bimestral (60 días)", "Mensual (30 días)"], index=0)
             
             c1, c2 = st.columns(2)
             cargo_fijo = c1.number_input("Cargo Fijo ($)", min_value=0.0, value=0.0)
@@ -354,7 +456,7 @@ with pestaña4:
             lim_basico = r1_col.number_input("Límite Básico (kWh)", min_value=1.0, value=150.0)
             p_basico = r1_col.number_input("Precio Básico ($)", min_value=0.0, value=1.087)
             
-            lim_inter = r2_col.number_input("Límite Intermedio Acumulado (kWh)", min_value=lim_basico, value=280.0, help="150 iniciales + 130 siguientes = 280 kWh")
+            lim_inter = r2_col.number_input("Límite Intermedio Acumulado (kWh)", min_value=lim_basico, value=280.0)
             p_inter = r2_col.number_input("Precio Intermedio ($)", min_value=0.0, value=1.320)
             
             p_exced = r3_col.number_input("Precio Excedente ($)", min_value=0.0, value=3.861)
@@ -366,6 +468,8 @@ with pestaña4:
             if st.form_submit_button("➕ Registrar Nueva Tarifa"):
                 data_tarifa = {
                     "nombre": nombre_tarifa,
+                    "dia_corte_cfe": int(dia_corte),
+                    "es_bimestral": True if es_bimestral == "Bimestral (60 días)" else False,
                     "cargo_fijo": float(cargo_fijo),
                     "limite_basico": float(lim_basico),
                     "precio_basico": float(p_basico),
