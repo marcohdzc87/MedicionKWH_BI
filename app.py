@@ -29,6 +29,8 @@ from growattServer import GrowattApi, Timespan
 
 
 
+import growattServer
+
 def obtener_solar_growatt_directo():
     user = st.secrets.get("GROWATT_USER") or os.getenv("GROWATT_USER")
     pw = st.secrets.get("GROWATT_PASS") or os.getenv("GROWATT_PASS")
@@ -48,31 +50,32 @@ def obtener_solar_growatt_directo():
         user_id = login['user']['id']
         plant_list = api.plant_list(user_id)
         
-        # Extraer el ID de la planta
         data_list = plant_list.get('data', [])
         if not data_list:
             return None, "No se encontraron plantas solares en esta cuenta."
             
         plant_id = data_list[0]['plantId']
         
-        # Obtenemos los detalles con compatibilidad para distintas versiones de Timespan
-        try:
-            # Opción A: Intentar usar el Enum en minúscula (day)
-            timespan_day = getattr(growattServer.Timespan, 'day', getattr(growattServer.Timespan, 'DAY', 1))
-            fecha_hoy = datetime.now().strftime("%Y-%m-%d")
-            info = api.plant_detail(plant_id, timespan=timespan_day, date=fecha_hoy)
-        except Exception:
-            # Opción B: Si falla plant_detail, consultamos el resumen general de la planta directamente
-            info = api.plant_info(plant_id)
-
-        # Buscar el valor eTotal en la respuesta
-        e_total_val = info.get('eTotal') or info.get('nominalPower') or info.get('totalEnergy')
+        # Obtener la lista de dispositivos (inversores) asociados a la planta
+        devices = api.device_list(plant_id)
         
+        # Buscar el valor eTotal exacto del inversor
+        e_total_val = None
+        if isinstance(devices, list) and len(devices) > 0:
+            e_total_val = devices[0].get('eTotal')
+        elif isinstance(devices, dict) and 'data' in devices and len(devices['data']) > 0:
+            e_total_val = devices['data'][0].get('eTotal')
+            
+        # Si no vino en device_list, consultar la lista detallada de planta
+        if e_total_val is None:
+            plant_detail_data = api.plant_detail_data(plant_id)
+            e_total_val = plant_detail_data.get('eTotal')
+
         if e_total_val is not None:
             kwh_total = int(round(float(e_total_val)))
             return kwh_total, None
         else:
-            return None, f"No se pudo leer eTotal. Respuesta recibida: {info}"
+            return None, f"No se encontró el campo eTotal en la respuesta: {devices}"
 
     except Exception as e:
         return None, str(e)
