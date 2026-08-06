@@ -155,12 +155,13 @@ with pestaña1:
             dias_restantes = (fin_ciclo - fecha_act).days
             dias_restantes = max(0, dias_restantes)
             
-            # Consumos e inyecciones en enteros
+            # Consumos e inyecciones en enteros estrictos
             cons_medido = max(0, int(round(lectura_actual["lectura_cons_kwh"] - lectura_anterior["lectura_cons_kwh"])))
             inyec_medida = max(0, int(round(lectura_actual["lectura_inyec_kwh"] - lectura_anterior["lectura_inyec_kwh"])))
             neto_medido = cons_medido - inyec_medida
             
             gen_solar = max(0, int(round(lectura_actual["generacion_solar_total_kwh"] - lectura_anterior["generacion_solar_total_kwh"])))
+            gen_solar_acumulada = int(round(lectura_actual["generacion_solar_total_kwh"]))
             
             cons_diario = cons_medido / dias_transcurridos
             inyec_diaria = inyec_medida / dias_transcurridos
@@ -188,16 +189,14 @@ with pestaña1:
             
             st.divider()
             
-            # Fila 1: Métricas de Consumo, Generación e Inyección (4 Columnas)
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Tomado de CFE", f"{cons_medido:,} kWh", f"{cons_diario:.1f} kWh/día")
-            col2.metric("Generación Solar Total", f"{gen_solar:,} kWh", f"{gen_solar_diaria:.1f} kWh/día", help="Producción registrada de los paneles")
+            col2.metric("Generación Solar Periodo", f"{gen_solar:,} kWh", f"Total Acum: {gen_solar_acumulada:,} kWh", help="Producción en el intervalo")
             col3.metric("Inyectado a CFE", f"{inyec_medida:,} kWh", f"{inyec_diaria:.1f} kWh/día")
             col4.metric("Recibo Estimado Al Día", f"${calc_actual['total']:,.2f} MXN", f"Neto: {calc_actual['kwh_facturables']:,} kWh")
             
             st.divider()
             
-            # Fila 2: Métricas Proyectadas
             st.markdown("### 🔮 Proyección al Cierre de Corte CFE")
             p1, p2, p3, p4 = st.columns(4)
             p1.metric("Días Faltantes para Corte", f"{dias_restantes} días")
@@ -212,27 +211,22 @@ with pestaña1:
             with col_graf:
                 st.subheader("Visualización del Historial de Energía")
                 
-                # --- PREPARACIÓN DE DATOS DIFERENCIALES ---
                 df_grafica = df.sort_values("fecha_corte").copy()
                 
-                # Asegurar valores enteros y positivos en los deltas
                 df_grafica["Consumido CFE"] = df_grafica["lectura_cons_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
                 df_grafica["Inyectado CFE"] = df_grafica["lectura_inyec_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
                 df_grafica["Generación Solar"] = df_grafica["generacion_solar_total_kwh"].diff().fillna(0).apply(lambda x: max(0, int(round(x))))
                 df_grafica["Saldo Neto CFE"] = df_grafica["Consumido CFE"] - df_grafica["Inyectado CFE"]
                 
-                # Ignoramos la primera fila solo para los deltas
-                df_grafica_clean = df_grafica.iloc[1:].copy()
+                df_grafica_clean = df_grafica.iloc[1:].copy() if len(df_grafica) > 1 else df_grafica.copy()
                 df_grafica_clean["Periodo"] = df_grafica_clean["fecha_corte"].astype(str)
                 
-                # Selector de formato de gráfica
                 v_graf1, v_graf2, v_graf3 = st.tabs([
                     "📊 Barras Agrupadas (Intervalos)", 
                     "📉 Saldo Neto (Net Metering)", 
                     "📈 Odómetros Acumulados"
                 ])
                 
-                # OPCIÓN 1: Barras Agrupadas
                 with v_graf1:
                     if not df_grafica_clean.empty:
                         df_melted = df_grafica_clean.melt(
@@ -249,9 +243,9 @@ with pestaña1:
                             barmode="group",
                             text_auto=True,
                             color_discrete_map={
-                                "Consumido CFE": "#1f77b4",     # Azul
-                                "Inyectado CFE": "#2ca02c",     # Verde
-                                "Generación Solar": "#ff7f0e"   # Naranja Solar
+                                "Consumido CFE": "#1f77b4",
+                                "Inyectado CFE": "#2ca02c",
+                                "Generación Solar": "#ff7f0e"
                             },
                             title="Energía del Intervalo (kWh Reales por Toma)"
                         )
@@ -260,7 +254,6 @@ with pestaña1:
                     else:
                         st.info("Registra al menos 2 lecturas para visualizar barras agrupadas.")
                         
-                # OPCIÓN 2: Saldo Neto por Periodo
                 with v_graf2:
                     if not df_grafica_clean.empty:
                         fig2 = px.bar(
@@ -272,11 +265,11 @@ with pestaña1:
                             color_continuous_scale=["#2ca02c", "#d62728"],
                             title="Balance Neto a Facturar (Consumo CFE - Inyección CFE)"
                         )
+                        fig2.update_layout(yaxis_title="kWh Netos", xaxis_title="Fecha de Corte")
                         st.plotly_chart(fig2, use_container_width=True)
                     else:
                         st.info("Registra al menos 2 lecturas para calcular saldo neto.")
                         
-                # OPCIÓN 3: Líneas de Odómetros Acumulados
                 with v_graf3:
                     fig3 = px.line(
                         df, 
@@ -315,7 +308,7 @@ with pestaña1:
     else:
         st.info("👋 **¡Bienvenido!** Dirígete a la pestaña **⚙️ Administración de Tarifas y Ciclo** para configurar tus parámetros de corte.")
 
-# --- PESTAÑA 2: CAPTURAR Y EDITAR LECTURAS ---
+# --- PESTAÑA 2: CAPTURAR Y EDITAR LECTURAS (CON VALIDACIÓN ESTRUCTURAL DE MINIMOS) ---
 with pestaña2:
     try:
         res_tarifas = supabase.table("tarifas").select("*").execute()
@@ -333,52 +326,78 @@ with pestaña2:
         if tarifas_dict:
             try:
                 res_ultima = supabase.table("lecturas").select("*").order("fecha_corte", desc=True).limit(1).execute()
-                credito_anterior = int(round(res_ultima.data[0]["credito_remanente_kwh"])) if res_ultima.data else 0
+                ult_reg = res_ultima.data[0] if res_ultima.data else None
+                credito_anterior = int(round(ult_reg["credito_remanente_kwh"])) if ult_reg else 0
             except Exception:
-                res_ultima = None
+                ult_reg = None
                 credito_anterior = 0
             
-            with st.form("form_registro_libre", clear_on_submit=True):
+            # Mostrar referencias de valores mínimos esperados en la pantalla
+            if ult_reg:
+                min_cons = int(round(ult_reg["lectura_cons_kwh"]))
+                min_inyec = int(round(ult_reg["lectura_inyec_kwh"]))
+                min_solar = int(round(ult_reg["generacion_solar_total_kwh"]))
+                st.info(f"📌 **Valores mínimos esperados (Lectura del {ult_reg['fecha_corte']}):**  \n"
+                        f"• Consumo Red $\ge$ **{min_cons:,} kWh** | "
+                        f"• Inyección Red $\ge$ **{min_inyec:,} kWh** | "
+                        f"• Generación Solar $\ge$ **{min_solar:,} kWh**")
+            else:
+                min_cons, min_inyec, min_solar = 0, 0, 0
+            
+            with st.form("form_registro_libre", clear_on_submit=False):
                 fecha = st.date_input("Fecha de Toma de Lectura", value=datetime.now())
                 
                 c_a, c_b = st.columns(2)
-                cons_kwh = c_a.number_input("Lectura Medidor - Consumo (kWh / Código 1.8.0)", min_value=0, step=1, value=0)
-                inyec_kwh = c_b.number_input("Lectura Medidor - Inyección (kWh / Código 2.8.0)", min_value=0, step=1, value=0)
+                cons_kwh = c_a.number_input("Lectura Medidor - Consumo (kWh / Código 1.8.0)", min_value=0, step=1, value=min_cons)
+                inyec_kwh = c_b.number_input("Lectura Medidor - Inyección (kWh / Código 2.8.0)", min_value=0, step=1, value=min_inyec)
                 
-                solar_kwh = st.number_input("Generación Solar Acumulada Inversor (kWh)", min_value=0, step=1, value=0)
+                solar_kwh = st.number_input("Generación Solar Acumulada Inversor (kWh)", min_value=0, step=1, value=min_solar)
                 tarifa_sel = st.selectbox("Tarifa Aplicable", list(tarifas_dict.keys()))
                 
                 es_cierre = st.checkbox("Marcar como Cierre Oficial de Bimestre / Recibo CFE")
                 notas = st.text_input("Notas (Ej. 'Lectura semanal', 'Corte oficial CFE')")
                 
                 if st.form_submit_button("Guardar Registro"):
-                    if res_ultima and res_ultima.data:
-                        u = res_ultima.data[0]
-                        c_periodo = cons_kwh - int(round(u["lectura_cons_kwh"]))
-                        i_periodo = inyec_kwh - int(round(u["lectura_inyec_kwh"]))
-                        neto = c_periodo - i_periodo
-                        
-                        t_obj = [t for t in tarifas_list if t["id"] == tarifas_dict[tarifa_sel]][0]
-                        res_calc = calcular_detalle_factura(neto, credito_anterior, t_obj)
-                        
-                        nuevo_rem = res_calc["nuevo_credito"] if es_cierre else credito_anterior
-                    else:
-                        nuevo_rem = 0
+                    # VALIDACIÓN DE LECTURA NO MENOR
+                    errores_val = []
+                    if ult_reg:
+                        if cons_kwh < min_cons:
+                            errores_val.append(f"El consumo ({cons_kwh:,} kWh) no puede ser menor a la lectura previa ({min_cons:,} kWh).")
+                        if inyec_kwh < min_inyec:
+                            errores_val.append(f"La inyección ({inyec_kwh:,} kWh) no puede ser menor a la lectura previa ({min_inyec:,} kWh).")
+                        if solar_kwh < min_solar:
+                            errores_val.append(f"La generación solar ({solar_kwh:,} kWh) no puede ser menor a la lectura previa ({min_solar:,} kWh).")
                     
-                    data = {
-                        "fecha_corte": str(fecha),
-                        "lectura_cons_kwh": cons_kwh,
-                        "lectura_inyec_kwh": inyec_kwh,
-                        "generacion_solar_total_kwh": solar_kwh,
-                        "tarifa_id": tarifas_dict[tarifa_sel],
-                        "credito_anterior_kwh": credito_anterior,
-                        "credito_remanente_kwh": nuevo_rem,
-                        "es_cierre_periodo": es_cierre,
-                        "notas": notas
-                    }
-                    supabase.table("lecturas").insert(data).execute()
-                    st.success(f"¡Lectura registrada para el {fecha}!")
-                    st.rerun()
+                    if errores_val:
+                        for err in errores_val:
+                            st.error(f"❌ {err}")
+                    else:
+                        if ult_reg:
+                            c_periodo = cons_kwh - min_cons
+                            i_periodo = inyec_kwh - min_inyec
+                            neto = c_periodo - i_periodo
+                            
+                            t_obj = [t for t in tarifas_list if t["id"] == tarifas_dict[tarifa_sel]][0]
+                            res_calc = calcular_detalle_factura(neto, credito_anterior, t_obj)
+                            
+                            nuevo_rem = res_calc["nuevo_credito"] if es_cierre else credito_anterior
+                        else:
+                            nuevo_rem = 0
+                        
+                        data = {
+                            "fecha_corte": str(fecha),
+                            "lectura_cons_kwh": cons_kwh,
+                            "lectura_inyec_kwh": inyec_kwh,
+                            "generacion_solar_total_kwh": solar_kwh,
+                            "tarifa_id": tarifas_dict[tarifa_sel],
+                            "credito_anterior_kwh": credito_anterior,
+                            "credito_remanente_kwh": nuevo_rem,
+                            "es_cierre_periodo": es_cierre,
+                            "notas": notas
+                        }
+                        supabase.table("lecturas").insert(data).execute()
+                        st.success(f"¡Lectura registrada para el {fecha}!")
+                        st.rerun()
         else:
             st.warning("Primero debes registrar al menos una tarifa.")
 
@@ -392,7 +411,7 @@ with pestaña2:
             lecturas_list = []
             
         if lecturas_list:
-            opciones_lec = {f"{l['fecha_corte']} - Consumo: {int(round(l['lectura_cons_kwh']))} kWh / Inyección: {int(round(l['lectura_inyec_kwh']))} kWh": l for l in lecturas_list}
+            opciones_lec = {f"{l['fecha_corte']} - Consumo: {int(round(l['lectura_cons_kwh']))} kWh / Inyección: {int(round(l['lectura_inyec_kwh']))} kWh / Solar: {int(round(l['generacion_solar_total_kwh']))} kWh": l for l in lecturas_list}
             sel_lec_label = st.selectbox("Selecciona una lectura registrada para editar o eliminar:", list(opciones_lec.keys()))
             lec_sel = opciones_lec[sel_lec_label]
             
