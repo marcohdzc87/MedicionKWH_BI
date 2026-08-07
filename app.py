@@ -239,12 +239,18 @@ with pestaña1:
                 with st.spinner("Conectando con Growatt..."):
                     kwh_tot, err_g = obtener_solar_growatt_directo()
                     if kwh_tot is not None:
+                        # Actualizar la última lectura registrada en Supabase
                         ult_id_sync = df.iloc[-1]["id"]
-                        supabase.table("lecturas").update({"generacion_solar_total_kwh": kwh_tot}).eq("id", ult_id_sync).execute()
-                        st.success(f"¡Sincronizado! {kwh_tot:,} kWh registrados.")
+                        supabase.table("lecturas").update({
+                            "generacion_solar_total_kwh": kwh_tot
+                        }).eq("id", ult_id_sync).execute()
+                        
+                        # Mensaje de confirmación detallado
+                        st.success(f"✅ ¡Sincronizado! Generación total Growatt: **{kwh_tot:,} kWh** registrada en el último historial.")
+                        st.toast(f"☀️ Solar actualizado: {kwh_tot:,} kWh", icon="✅")
                         st.rerun()
                     else:
-                        st.error(f"Error Growatt: {err_g}")
+                        st.error(f"❌ Error Growatt: {err_g}")
 
         row_ciclo_sel = ciclos_unicos[ciclos_unicos["ciclo_etiqueta"] == ciclo_seleccionado].iloc[0]
         inicio_ciclo = row_ciclo_sel["ciclo_inicio"]
