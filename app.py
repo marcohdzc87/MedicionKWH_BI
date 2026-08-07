@@ -235,6 +235,14 @@ with pestaña1:
         
         with c_head2:
             st.markdown("### ☀️ Sync Growatt")
+            
+            # 1. Mostrar notificación persistente si proviene de un clic reciente
+            if "sync_mensaje" in st.session_state:
+                st.success(st.session_state["sync_mensaje"])
+                # Se limpia para que no vuelva a aparecer en futuras interacciones
+                del st.session_state["sync_mensaje"]
+
+            # 2. Lógica de ejecución del botón
             if st.button("🔄 Sincronizar Inversor"):
                 with st.spinner("Conectando con Growatt..."):
                     kwh_tot, err_g = obtener_solar_growatt_directo()
@@ -245,9 +253,8 @@ with pestaña1:
                             "generacion_solar_total_kwh": kwh_tot
                         }).eq("id", ult_id_sync).execute()
                         
-                        # Mensaje de confirmación detallado
-                        st.success(f"✅ ¡Sincronizado! Generación total Growatt: **{kwh_tot:,} kWh** registrada en el último historial.")
-                        st.toast(f"☀️ Solar actualizado: {kwh_tot:,} kWh", icon="✅")
+                        # Guardar el mensaje en el estado de la sesión ANTES del rerun
+                        st.session_state["sync_mensaje"] = f"✅ ¡Sincronizado! Generación Growatt: **{kwh_tot:,} kWh**."
                         st.rerun()
                     else:
                         st.error(f"❌ Error Growatt: {err_g}")
